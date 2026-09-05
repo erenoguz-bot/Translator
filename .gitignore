@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Models (large, fetched via scripts/fetch_models.py)
+models/*.argosmodel
+models/.extracted/
+
+# Runtime artifacts
+work/
+output/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+.pytest_cache/
