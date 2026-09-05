@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Models (large, fetched via scripts/fetch_models.py)
+models/*.argosmodel
+models/.extracted/
+
+# Runtime artifacts
+work/
+output/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+.pytest_cache/
+
+# Sandbox-only Qt stub shared objects (would shadow real GL libs on a
+# real machine — keep them local to the sandbox)
+tools/stub-libs/

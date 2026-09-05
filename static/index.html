@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PDF Parser &amp; Translator</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>" />
+<link rel="stylesheet" href="/static/style.css?v=5" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">译</div>
+    <div>
+      <h1>PDF Parser &amp; Translator</h1>
+      <p class="tagline">Parse layout-aware text · Offline neural MT · Bilingual PDFs</p>
+    </div>
+  </div>
+  <div class="badges" id="engineBadges">
+    <span class="badge muted">checking engine…</span>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- ============ LEFT: input & options ============ -->
+  <aside class="col-left">
+    <section class="card" id="uploadCard">
+      <h2>1 · Document</h2>
+      <div id="dropzone" class="dropzone" tabindex="0">
+        <div class="dz-icon">📄</div>
+        <div class="dz-title">Drop a PDF here</div>
+        <div class="dz-sub">or <span class="link" id="browseBtn">browse files</span> · up to 100 MB</div>
+        <input type="file" id="fileInput" accept="application/pdf" hidden />
+      </div>
+      <div class="row split">
+        <button class="btn ghost" id="sampleBtn">✨ Try the sample document (2 pages)</button>
+        <button class="btn ghost" id="clearBtn" hidden>✕ Clear</button>
+      </div>
+
+      <div id="docInfo" class="doc-info" hidden>
+        <div class="doc-title-row">
+          <span class="file-ico">📄</span>
+          <div>
+            <div class="doc-name" id="docName"></div>
+            <div class="doc-meta" id="docMeta"></div>
+          </div>
+          <span class="lang-chip" id="detectedLang" hidden></span>
+        </div>
+        <div class="thumbs" id="thumbs"></div>
+      </div>
+    </section>
+
+    <section class="card" id="optionsCard">
+      <h2>2 · Translation</h2>
+      <div class="field">
+        <label for="srcLang">From</label>
+        <select id="srcLang"></select>
+      </div>
+      <div class="field">
+        <label for="tgtLang">To</label>
+        <select id="tgtLang"></select>
+      </div>
+      <div class="field">
+        <label>Output</label>
+        <div class="seg" id="modeSeg">
+          <button data-mode="bilingual" class="on">Bilingual PDF</button>
+          <button data-mode="translated">Translated PDF</button>
+        </div>
+      </div>
+      <div class="field two">
+        <div>
+          <label for="pageRange">Pages</label>
+          <input type="text" id="pageRange" placeholder="all (e.g. 1-3,5)" />
+        </div>
+        <div class="check">
+          <label class="chk"><input type="checkbox" id="ocrChk" checked /> OCR scanned pages</label>
+        </div>
+      </div>
+      <button class="btn primary big" id="translateBtn" disabled>Translate document →</button>
+      <div class="hint" id="pairHint"></div>
+    </section>
+
+    <section class="card" id="progressCard" hidden>
+      <h2>Progress</h2>
+      <div class="stage-row"><span id="stageLabel">Queued</span><span id="stagePct" class="pct">0%</span></div>
+      <div class="bar"><div class="bar-fill" id="barFill"></div></div>
+      <div class="stage-msg" id="stageMsg"></div>
+    </section>
+  </aside>
+
+  <!-- ============ RIGHT: results ============ -->
+  <section class="col-right card">
+    <div class="tabs" id="tabs">
+      <button data-tab="sidebyside" class="on">Side-by-side</button>
+      <button data-tab="downloads">Downloads</button>
+      <button data-tab="data">Data (JSON)</button>
+      <span class="tab-status" id="tabStatus">No job yet</span>
+    </div>
+
+    <div class="tabpane" id="pane-sidebyside">
+      <div class="empty" id="emptyState">
+        <div class="empty-ico">🌐</div>
+        <h3>Upload a PDF to get started</h3>
+        <p>Drop any text-based PDF (or a scanned one — OCR is built in).<br/>
+        The parser keeps fonts, headings and alignment; the offline Opus-MT
+        engine translates paragraph by paragraph.</p>
+      </div>
+      <div id="sbsPager" class="sbs-pager" hidden></div>
+      <div id="sbsHead" class="sbs-head" hidden>
+        <div class="sbs-col-src" id="sbsSrcHead"></div>
+        <div class="sbs-col-tgt" id="sbsTgtHead"></div>
+      </div>
+      <div id="sbsBody" class="sbs-body" hidden></div>
+    </div>
+
+    <div class="tabpane" id="pane-downloads" hidden>
+      <div class="preview-block" id="pdfPreviewBlock" hidden>
+        <div class="preview-head">
+          <span>PDF preview — if Download does nothing, save from here</span>
+          <div class="preview-tabs">
+            <button data-pv="bilingual" class="on">Bilingual</button>
+            <button data-pv="translated">Translated</button>
+          </div>
+        </div>
+        <iframe id="pdfFrame" class="pdf-frame" title="PDF preview"></iframe>
+      </div>
+      <div id="dlList" class="dl-list"></div>
+    </div>
+
+    <div class="tabpane" id="pane-data" hidden>
+      <pre id="jsonView" class="json-view"></pre>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <span>100% local inference — Opus-MT (Argos) via CTranslate2 · PyMuPDF parser · RapidOCR for scans</span>
+  <span id="footPairs"></span>
+</footer>
+
+<!-- Bump ?v= whenever app.js / style.css change (hard cache-bust) -->
+<script src="/static/app.js?v=5"></script>
+</body>
+</html>

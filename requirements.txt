@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pymupdf
+reportlab
+pillow
+ctranslate2
+sentencepiece
+langdetect
+rapidocr
+onnxruntime
+opencv-python-headless
+arabic-reshaper
+python-bidi
