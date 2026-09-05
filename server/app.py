@@ -33,6 +33,16 @@ _PREVIEW_CACHE: dict[str, tuple[float, bytes]] = {}
 _CACHE_LIMIT = 24
 
 
+# Always revalidate the web UI so users get the latest app.js immediately
+# (stale cached JS breaks new flows such as the online-translation path).
+@app.middleware("http")
+async def no_cache_ui(request, call_next):
+    resp = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 # ---------------------------------------------------------------------------
 # Static UI
 # ---------------------------------------------------------------------------
@@ -221,8 +231,11 @@ def start_translation(doc_id: str, payload: dict):
         raise HTTPException(400, "engine must be auto, local or online")
     pages = _parse_page_range(payload.get("pages"), doc.page_count)
 
-    job = run_translation(doc, source, target, mode, pages=pages,
-                          use_ocr=use_ocr, engine_name=engine_name)
+    try:
+        job = run_translation(doc, source, target, mode, pages=pages,
+                              use_ocr=use_ocr, engine_name=engine_name)
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
     return job.snapshot()
 
 

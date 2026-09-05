@@ -272,8 +272,12 @@ def run_translation(doc: ParsedDocument,
     if needs_online and engine_name != "local":
         if not online_mt.is_available():
             raise ValueError(
-                f"No local model for this pair and the online engine is "
-                f"unreachable from this server. Local pairs: "
+                f"No offline model for {source} → {target} and this server "
+                f"cannot reach the online translation service. In the web "
+                f"UI these pairs are translated in your browser — please "
+                f"reload the page (Ctrl+Shift+R). On a machine with "
+                f"internet access this pair works directly. "
+                f"Offline pairs: "
                 + ", ".join(f"{a}→{b}"
                             for a, b in engine.available_pairs))
     if engine_name == "local" and needs_online:
