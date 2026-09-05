@@ -19,6 +19,51 @@ from .config import OCR_DPI
 from .ocr import OCREngine, OCRLine, get_ocr
 
 MEDIAN_SIZE = 10.0
+PARA_CHAR_LIMIT = 1800
+
+
+def _chunk_long_text(text: str, limit: int = PARA_CHAR_LIMIT) -> list[str]:
+    """Split very long paragraph text at word boundaries.
+
+    Keeps every chunk ≤ limit chars so that PDF flowables (and the MT
+    engine) can never receive a single unbreakable block taller than a
+    page.
+    """
+    if len(text) <= limit:
+        return [text]
+    out: list[str] = []
+    start, n = 0, len(text)
+    while start < n:
+        end = min(start + limit, n)
+        if end < n:
+            lo = start + limit // 2
+            cut = text.rfind(" ", lo, end)
+            if cut <= lo:
+                m = re.search(r"[.!?…。！？;:;]\s*", text[lo:end])
+                if m and m.end() > 10:
+                    cut = lo + m.end()
+            if cut <= lo:
+                cut = end
+            end = cut
+        chunk = text[start:end].strip()
+        if chunk:
+            out.append(chunk)
+        start = end
+    return out or [text]
+
+
+def _expand_long_paragraphs(paras: list) -> list:
+    """Split paragraphs longer than PARA_CHAR_LIMIT into consecutive parts."""
+    out: list = []
+    for p in paras:
+        for c in _chunk_long_text(p.text):
+            out.append(Paragraph(
+                text=c, page=p.page, y=p.y, size=p.size,
+                bold=p.bold, italic=p.italic, align=p.align,
+                kind=p.kind, style_ratio=p.style_ratio,
+                x0=p.x0, x1=p.x1, source=p.source, y_end=p.y_end,
+            ))
+    return out
 
 
 @dataclass
@@ -353,6 +398,7 @@ def parse_pdf(path: Path, doc_id: str | None = None) -> ParsedDocument:
                 page_paras.extend(
                     _group_lines_to_paragraphs(bl, pno, page.rect.width, median))
             page_paras = _merge_continuations(page_paras)
+            page_paras = _expand_long_paragraphs(page_paras)
             paragraphs.extend(page_paras)
     _mark_numbered_lists(paragraphs)
 

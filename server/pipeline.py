@@ -142,6 +142,107 @@ def _select_paragraphs(doc: ParsedDocument, pages: list[int] | None,
 
 
 # ---------------------------------------------------------------------------
+# Client-side translation build (browser did the translating)
+# ---------------------------------------------------------------------------
+
+
+def run_client_build(doc: ParsedDocument,
+                     source_lang: str,
+                     target_lang: str,
+                     mode: str,
+                     paragraphs: list[dict]) -> Job:
+    """Build outputs from client-provided translations (online mode).
+
+    `paragraphs`: [{text, translation, kind, align, page, source?}, ...]
+    """
+    if not paragraphs:
+        raise ValueError("No paragraphs provided.")
+    for p in paragraphs:
+        if "text" not in p or "translation" not in p:
+            raise ValueError("Each paragraph needs 'text' and 'translation'.")
+    job = STORE.create_job(
+        doc.id,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        mode=mode,
+    )
+    job.engine_name = "online (browser)"
+
+    def worker() -> None:
+        out_dir = OUTPUT_DIR / job.id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            job.status = "running"
+            job.emit("build", 50, "Composing PDFs from browser translations…")
+            info = pdf_writer.DocInfo(
+                title=doc.title,
+                filename=doc.filename,
+                author=doc.author,
+                page_count=doc.page_count,
+                word_count=sum(len(str(p.get("text", "")).split())
+                               for p in paragraphs),
+            )
+            out_paras = [
+                {"text": str(p.get("text", "")),
+                 "translation": str(p.get("translation", "")),
+                 "kind": p.get("kind", "body"),
+                 "align": p.get("align", "left"),
+                 "page": int(p.get("page", 0)),
+                 "source": p.get("source", "text")}
+                for p in paragraphs
+            ]
+            base = Path(doc.filename).stem
+            job.outputs["bilingual_pdf"] = str(pdf_writer.build_bilingual_pdf(
+                out_paras, info, source_lang, target_lang,
+                out_dir / f"{base}.bilingual.pdf"))
+            job.outputs["translated_pdf"] = str(pdf_writer.build_translated_pdf(
+                out_paras, info, target_lang,
+                out_dir / f"{base}.translated.pdf"))
+            job.outputs["text_bilingual"] = str(pdf_writer.build_txt(
+                out_paras, info, "bilingual", target_lang,
+                out_dir / f"{base}.bilingual.txt"))
+            job.outputs["text_translation"] = str(pdf_writer.build_txt(
+                out_paras, info, "translation", target_lang,
+                out_dir / f"{base}.translated.txt"))
+            job.outputs["json"] = str(pdf_writer.build_json(
+                out_paras, info, source_lang, target_lang,
+                out_dir / "result.json",
+                extra={
+                    "engine": "Online service (browser)",
+                    "route": ["online engine (browser)"],
+                    "ocr_used": any(p.get("source") == "ocr"
+                                    for p in out_paras),
+                    "paragraph_count": len(out_paras),
+                    "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            ))
+            job.stats = {
+                "words": info.word_count,
+                "paragraphs": len(out_paras),
+                "route": ["online engine (browser)"],
+                "ocr_used": any(p.get("source") == "ocr" for p in out_paras),
+                "source": source_lang,
+                "source_language": source_lang,
+                "target": target_lang,
+                "target_language": target_lang,
+                "elapsed": 0,
+            }
+            job.status = "done"
+            job.finished = time.time()
+            job.emit("done", 100, "Done")
+        except Exception as e:
+            job.status = "error"
+            job.error = str(e)
+            job.finished = time.time()
+            job.emit("error", job.progress, str(e))
+            traceback.print_exc()
+
+    t = threading.Thread(target=worker, daemon=True, name=f"job-{job.id}")
+    t.start()
+    return job
+
+
+# ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
 
@@ -151,17 +252,33 @@ def run_translation(doc: ParsedDocument,
                     target: str,
                     mode: str,
                     pages: list[int] | None = None,
-                    use_ocr: bool = True) -> Job:
-    """Validate inputs, then start the pipeline on a worker thread."""
+                    use_ocr: bool = True,
+                    engine_name: str = "auto") -> Job:
+    """Validate inputs, then start the pipeline on a worker thread.
+
+    engine_name: "auto" (local model if available, else online),
+                 "local" (offline Opus-MT only) or "online".
+    """
+    from . import online_mt
+    from .config import LOCAL_LANGUAGES
+
     engine = get_engine()
     auto = source == "auto"
-    if not auto and source != target:
-        if not engine.route(source, target):
+    local_route = engine.route(source, target) if not auto else None
+    force_online = engine_name == "online" and source != target
+    needs_online = (target not in LOCAL_LANGUAGES
+                    or (not auto and source != target and not local_route)
+                    or force_online)
+    if needs_online and engine_name != "local":
+        if not online_mt.is_available():
             raise ValueError(
-                f"No model for {source} → {target}. "
-                f"Available pairs: "
-                + ", ".join(f"{a}→{b}" for a, b in engine.available_pairs)
-            )
+                f"No local model for this pair and the online engine is "
+                f"unreachable from this server. Local pairs: "
+                + ", ".join(f"{a}→{b}"
+                            for a, b in engine.available_pairs))
+    if engine_name == "local" and needs_online:
+        raise ValueError(
+            "This pair has no local model — choose the online engine.")
     job = STORE.create_job(
         doc.id,
         source_lang="auto" if auto else source,
@@ -169,6 +286,7 @@ def run_translation(doc: ParsedDocument,
         mode=mode,
         auto_source=auto,
     )
+    job.engine_name = "online" if needs_online else "local"
 
     def worker() -> None:
         out_dir = OUTPUT_DIR / job.id
@@ -220,16 +338,36 @@ def run_translation(doc: ParsedDocument,
                 job.source_lang = resolved_source
                 job.message = f"Detected source language: {resolved_source} ({how})"
             if resolved_source != target:
-                route = engine.route(resolved_source, target)
-                if not route:
-                    raise ValueError(
-                        f"No model for {resolved_source} → {target}. "
-                        f"Available pairs: "
-                        + ", ".join(f"{a}→{b}" for a, b in engine.available_pairs)
-                    )
+                if job.engine_name == "online":
+                    route = []  # online engine: direct pair, no local model
+                else:
+                    route = engine.route(resolved_source, target)
+                    if not route:
+                        raise ValueError(
+                            f"No model for {resolved_source} → {target}. "
+                            f"Available pairs: "
+                            + ", ".join(f"{a}→{b}"
+                                        for a, b in engine.available_pairs)
+                        )
 
             # ---- 4. translate ----------------------------------------------
-            if resolved_source == target:
+            if job.engine_name == "online" and resolved_source != target:
+                from . import online_mt
+                job.emit("translate", 30,
+                         "Translating online (browser/server fallback)…")
+                n_paras = len(paras)
+
+                def on_batch(done, total):
+                    job.emit("translate", 30 + 58 * done / max(total, 1),
+                             f"Online translation… {done}/{total} chunks")
+
+                translations = online_mt.translate_texts(
+                    [p.text for p in paras], resolved_source, target,
+                    on_batch=on_batch)
+                for p, t in zip(paras, translations):
+                    p.translation = t
+                job.emit("translate", 88, "Translation complete")
+            elif resolved_source == target:
                 for p in paras:
                     p.translation = p.text
                 job.emit("translate", 88,
@@ -256,6 +394,10 @@ def run_translation(doc: ParsedDocument,
                             f"Translation failed on paragraph {i + 1}: {e}"
                         ) from e
                 job.emit("translate", 88, "Translation complete")
+
+            route_desc = [f"{a} → {b}" for a, b in route] or (
+                ["online engine"] if job.engine_name == "online"
+                else ["identity"])
 
             # ---- 5. build outputs ------------------------------------------
             job.emit("build", 90, "Composing PDFs…")
@@ -294,7 +436,7 @@ def run_translation(doc: ParsedDocument,
                 out_dir / "result.json",
                     extra={
                         "engine": "Opus-MT (Argos, CTranslate2)",
-                        "route": [f"{a} → {b}" for a, b in route] or ["identity"],
+                        "route": route_desc,
                         "ocr_used": any(p.source == "ocr" for p in paras),
                         "paragraph_count": len(out_paras),
                         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -305,7 +447,7 @@ def run_translation(doc: ParsedDocument,
             job.stats = {
                 "paragraphs": len(out_paras),
                 "words": info.word_count,
-                "route": [f"{a} → {b}" for a, b in route] or ["identity"],
+                "route": route_desc,
                 "ocr_used": any(p.source == "ocr" for p in paras),
                 "source_language": resolved_source,
                 "target_language": target,

@@ -16,14 +16,16 @@ from . import pdf_parser, sample_doc
 from .config import (
     DOCS_DIR,
     LANGUAGES,
+    LOCAL_LANGUAGES,
     MAX_UPLOAD_BYTES,
+    ONLINE_LANGUAGES,
     PREVIEW_DPI,
     STATIC_DIR,
     UPLOADS_DIR,
 )
 from .nmt import get_engine
 from .ocr import get_ocr
-from .pipeline import STORE, run_translation
+from .pipeline import STORE, run_client_build, run_translation
 
 app = FastAPI(title="PDF Parser & Translator", version="1.0.0")
 
@@ -57,6 +59,8 @@ def health():
         "models": engine.stats(),
         "ocr": get_ocr().available,
         "languages": LANGUAGES,
+        "local_languages": LOCAL_LANGUAGES,
+        "online_languages": ONLINE_LANGUAGES,
     }
 
 
@@ -66,8 +70,27 @@ def languages():
     pairs = sorted(f"{a}-{b}" for a, b in engine.available_pairs)
     return {
         "languages": LANGUAGES,
+        "local_languages": LOCAL_LANGUAGES,
         "pairs": pairs,
-        "pivot": "unlisted pairs are routed through English when possible",
+        "pivot": "unlisted local pairs are routed through English",
+    }
+
+
+@app.get("/api/translate-capabilities")
+def translate_capabilities():
+    from . import online_mt
+    engine = get_engine()
+    return {
+        "local": {
+            "languages": LOCAL_LANGUAGES,
+            "pairs": sorted(f"{a}-{b}" for a, b in engine.available_pairs),
+        },
+        "online": {
+            "languages": ONLINE_LANGUAGES,
+            "server_available": online_mt.is_available(timeout=3.0),
+            "note": ("online pairs are translated in the browser (or on the "
+                     "server when it has internet access)"),
+        },
     }
 
 
@@ -187,15 +210,39 @@ def start_translation(doc_id: str, payload: dict):
     target = str(payload.get("target", ""))
     mode = str(payload.get("mode", "bilingual"))
     use_ocr = bool(payload.get("ocr", True))
+    engine_name = str(payload.get("engine", "auto"))
     if source not in ("auto", *LANGUAGES):
         raise HTTPException(400, f"Unknown source language: {source}")
     if target not in LANGUAGES:
         raise HTTPException(400, f"Unknown target language: {target}")
     if mode not in ("bilingual", "translated"):
         raise HTTPException(400, "mode must be 'bilingual' or 'translated'")
+    if engine_name not in ("auto", "local", "online"):
+        raise HTTPException(400, "engine must be auto, local or online")
     pages = _parse_page_range(payload.get("pages"), doc.page_count)
 
-    job = run_translation(doc, source, target, mode, pages=pages, use_ocr=use_ocr)
+    job = run_translation(doc, source, target, mode, pages=pages,
+                          use_ocr=use_ocr, engine_name=engine_name)
+    return job.snapshot()
+
+
+@app.post("/api/documents/{doc_id}/build")
+def client_build(doc_id: str, payload: dict):
+    """Build PDF/TXT outputs from browser-side translations (online mode)."""
+    doc = STORE.document(doc_id)
+    if not doc:
+        raise HTTPException(404, "Document not found (server restarted?).")
+    source = str(payload.get("source", "auto"))
+    target = str(payload.get("target", ""))
+    mode = str(payload.get("mode", "bilingual"))
+    paragraphs = payload.get("paragraphs") or []
+    if target not in LANGUAGES:
+        raise HTTPException(400, f"Unknown target language: {target}")
+    if not isinstance(paragraphs, list):
+        raise HTTPException(400, "paragraphs must be a list")
+    if len(paragraphs) > 20000:
+        raise HTTPException(400, "Too many paragraphs")
+    job = run_client_build(doc, source, target, mode, paragraphs)
     return job.snapshot()
 
 

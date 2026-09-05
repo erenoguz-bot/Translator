@@ -61,6 +61,12 @@ def _register_fonts() -> None:
         pdfmetrics.registerFont(TTFont("NotoNaskhArabic", str(ar)))
     if arb.exists():
         pdfmetrics.registerFont(TTFont("NotoNaskhArabic-Bold", str(arb)))
+    th = FONTS_DIR / "NotoSansThai-Regular.ttf"
+    thb = FONTS_DIR / "NotoSansThai-Bold.ttf"
+    if th.exists():
+        pdfmetrics.registerFont(TTFont("NotoSansThai", str(th)))
+    if thb.exists():
+        pdfmetrics.registerFont(TTFont("NotoSansThai-Bold", str(thb)))
     # Built-in CJK font (no file needed)
     try:
         pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
@@ -76,6 +82,8 @@ def fonts_for(lang: str) -> tuple[str, str]:
         return "STSong-Light", "STSong-Light"
     if lang == "ar":
         return "NotoNaskhArabic", "NotoNaskhArabic-Bold"
+    if lang == "th":
+        return "NotoSansThai", "NotoSansThai-Bold"
     return "DejaVuSans", "DejaVuSans-Bold"
 
 
@@ -139,15 +147,33 @@ def _style_for(kind: str, lang: str, base: dict) -> ParagraphStyle:
     return st
 
 
+def _split_for_cell(text: str, limit: int = 1400) -> list[str]:
+    """Last line of defense for PDF flowables: split oversized cell text."""
+    if len(text or "") <= limit:
+        return [text or ""]
+    out: list[str] = []
+    start, n = 0, len(text)
+    while start < n:
+        end = min(start + limit, n)
+        if end < n:
+            cut = text.rfind(" ", start + limit // 2, end)
+            end = cut if cut > start else end
+        out.append(text[start:end].strip())
+        start = end
+    return [t for t in out if t] or [""]
+
+
 def _build_flowables(paras: list[dict], lang: str,
                      text_key: str = "text") -> list:
     """paradict: text, translation, kind, align"""
     flow = []
     for p in paras:
-        text = shape_text(p[text_key], lang)
-        st = _style_for(p.get("kind", "body"), lang,
-                        {"align": ALIGN.get(p.get("align", "left"), TA_LEFT)})
-        flow.append(Paragraph(esc(text), st))
+        for piece in _split_for_cell(p[text_key], 3000):
+            text = shape_text(piece, lang)
+            st = _style_for(p.get("kind", "body"), lang,
+                            {"align": ALIGN.get(p.get("align", "left"),
+                                                TA_LEFT)})
+            flow.append(Paragraph(esc(text), st))
     return flow
 
 
@@ -241,22 +267,33 @@ def build_bilingual_pdf(paras: list[dict], info: DocInfo, src_lang: str,
             story.append(bar)
             story.append(Spacer(1, 1.5 * mm))
             continue
-        cell_src = Paragraph(esc(shape_text(p["text"], src_lang)), style_src)
-        cell_tgt = Paragraph(esc(shape_text(p["translation"], tgt_lang)), style_tgt)
-        t = Table(
-            [[cell_src, cell_tgt]],
-            colWidths=[col_w, col_w],
-        )
-        t.setStyle(TableStyle([
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 6),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-            ("TOPPADDING", (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ("LINEBELOW", (0, 0), (-1, -1), 0.5, colors.HexColor("#e5e7eb")),
-            ("BACKGROUND", (0, 0), (0, 0), colors.HexColor("#f9fafb")),
-        ]))
-        story.append(t)
+        # one table per chunk → rows can never exceed the page height
+        src_parts = _split_for_cell(p["text"])
+        tgt_parts = _split_for_cell(p["translation"])
+        while len(tgt_parts) < len(src_parts):
+            tgt_parts.append("")
+        while len(src_parts) < len(tgt_parts):
+            src_parts.append("")
+        for src_piece, tgt_piece in zip(src_parts, tgt_parts):
+            cell_src = Paragraph(
+                esc(shape_text(src_piece, src_lang)), style_src)
+            cell_tgt = Paragraph(
+                esc(shape_text(tgt_piece, tgt_lang)), style_tgt)
+            t = Table(
+                [[cell_src, cell_tgt]],
+                colWidths=[col_w, col_w],
+            )
+            t.setStyle(TableStyle([
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ("LINEBELOW", (0, 0), (-1, -1), 0.5,
+                 colors.HexColor("#e5e7eb")),
+                ("BACKGROUND", (0, 0), (0, 0), colors.HexColor("#f9fafb")),
+            ]))
+            story.append(t)
 
     doc.build(story,
               onFirstPage=lambda c, d: _footer(c, d, f"Bilingual · {label}"),

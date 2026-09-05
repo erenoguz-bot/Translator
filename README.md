@@ -1,20 +1,25 @@
 # 📄 PDF Parser & Translator
 
-A full-featured, **100% local** PDF parser and translator: upload a PDF (or a
-*scanned* one), and get a translated document with original layout — plus a
-bilingual side-by-side PDF, plain text and structured JSON exports.
+A full-featured PDF parser and translator: upload a PDF (or a *scanned* one),
+and get a translated document with original layout — plus a bilingual
+side-by-side PDF, plain text and structured JSON exports. Runs **offline by
+default** (no API keys, no telemetry); a best-effort **online fallback**
+unlocks ~50 extra languages (e.g. **Turkish**) when an internet connection is
+available.
 
 ```
 PDF in  ──▶  PyMuPDF layout parser  ──▶  (RapidOCR for scanned pages)
                                               │
                               language detection (script + statistical)
                                               │
-                              Opus-MT neural MT (Argos models, CTranslate2)
+              Opus-MT neural MT (Argos, CTranslate2)  [9 languages, offline]
+              Google web endpoint fallback            [~50 more, online]
                                               │
                   translated PDF · bilingual PDF · TXT · JSON out
 ```
 
-Everything runs offline on CPU: no API keys, no cloud calls, no telemetry.
+Two apps share the same backend: a **web UI** (FastAPI, drag & drop) and a
+**desktop app** (PySide6).
 
 ---
 
@@ -35,9 +40,17 @@ Everything runs offline on CPU: no API keys, no cloud calls, no telemetry.
 ### Translator
 - **Offline neural MT**: Opus-MT models in Argos packaging, served by
   **CTranslate2** (int8) + SentencePiece.
-- **9 languages**: English, German, French, Spanish, Italian, Portuguese,
-  Russian, Arabic, Chinese (Simplified) — 16 direct model pairs, and *every*
-  pair of the 9 languages is reachable via automatic **English pivoting**.
+- **9 offline languages**: English, German, French, Spanish, Italian,
+  Portuguese, Russian, Arabic, Chinese (Simplified) — 16 direct model pairs,
+  and *every* pair of the 9 languages is reachable via automatic **English
+  pivoting**.
+- **Online fallback (~50 more languages, incl. Turkish)**: pairs without a
+  local model are translated via a free web endpoint. In the web UI the
+  *browser* calls the service and hands the text to the server for PDF
+  building (so it works even on a server with no internet); in the desktop
+  app the service is called locally. The engine is chosen automatically —
+  offline model first, online only when needed. Scanned (OCR) pages always
+  use the offline engine.
 - Sentence-level batching with token budgets; live per-word progress via SSE.
 - Source-language **auto-detection** (script fast paths for CJK/Cyrillic/
   Arabic + statistical detection for Latin scripts).
@@ -90,7 +103,9 @@ Then open <http://localhost:8000>, drop a PDF (or click
 | `POST` | `/api/documents/sample` | generate the built-in demo document |
 | `GET` | `/api/documents/{id}` | parsed summary (paragraphs, pages, TOC…) |
 | `GET` | `/api/documents/{id}/page/{n}` | PNG thumbnail of page n |
-| `POST` | `/api/documents/{id}/translate` | start a job `{source, target, mode, pages, ocr}` |
+| `POST` | `/api/documents/{id}/translate` | start a job `{source, target, mode, pages, ocr, engine}` |
+| `GET` | `/api/translate-capabilities` | offline pairs + online languages + availability |
+| `POST` | `/api/documents/{id}/build` | build outputs from browser-side translations (online mode) |
 | `GET` | `/api/jobs/{id}` | job status |
 | `GET` | `/api/jobs/{id}/events` | **SSE** live progress stream |
 | `GET` | `/api/jobs/{id}/result` | full result JSON |
@@ -110,23 +125,39 @@ curl -sOJ localhost:8000/api/jobs/$JOB/download?format=bilingual
 ## Project layout
 
 ```
-run.py                  server entry point (uvicorn)
+run.py                  web-server entry point (uvicorn)
 requirements.txt
 server/
   app.py                FastAPI app: REST + SSE + static UI
-  config.py             paths, languages, limits
+  config.py             paths, languages (offline + online), limits
   pdf_parser.py         PyMuPDF layout parsing, paragraph model, OCR glue
   ocr.py                RapidOCR wrapper (lazy, offline)
   langid.py             language detection (script + statistical)
   nmt.py                CTranslate2/SentencePiece engine, model registry,
                         sentence batching, English pivoting
+  online_mt.py          optional online fallback (free web endpoint, ~50 langs)
   pdf_writer.py         ReportLab builders (translated / bilingual / txt / json)
-  pipeline.py           job orchestration + progress events
+  pipeline.py           job orchestration + progress events (+ client build)
   sample_doc.py         built-in demo document generator
 static/                 web UI (vanilla JS, no build step)
+desktop/                PySide6 desktop app (reuses the server backend)
+  main.py               GUI, engine auto-selection, results, preview, save
+  worker.py             QThread running the same pipeline off the UI thread
+  theme.py              colors + QSS stylesheet
+tools/stub-libs/        tiny .so stubs so offscreen Qt runs headless in CI
+fonts/                  bundled TTFs (Noto Sans Thai, …)
 models/                 .argosmodel files (gitignored, fetched by script)
 scripts/fetch_models.py model downloader (partial GitHub clone)
 tests/test_pipeline.py  end-to-end tests (parse → OCR → MT → PDFs)
+tests/test_desktop.py   headless smoke test for the desktop app
+```
+
+### Desktop app
+
+```bash
+.venv/bin/pip install PySide6
+.venv/bin/python desktop/main.py             # launch the GUI
+.venv/bin/python desktop/main.py --smoke-test   # headless self-test
 ```
 
 ## Tests
@@ -135,9 +166,10 @@ tests/test_pipeline.py  end-to-end tests (parse → OCR → MT → PDFs)
 .venv/bin/python -m pytest tests/ -q
 ```
 
-19 end-to-end tests cover parsing, language detection, NMT routing &
-translation, pivoting, scanned-PDF OCR, and the generated PDFs (content +
-validity).
+28 tests cover parsing, language detection, NMT routing & translation,
+pivoting, scanned-PDF OCR, the online-fallback batching (mocked), the
+browser→server build path, engine selection, and the desktop app smoke test
+(headless offscreen Qt).
 
 ## Notes & limitations
 
@@ -151,6 +183,10 @@ validity).
   non-CT font engine can do.
 - Job state is in-memory per process (single uvicorn worker by design);
   restarting the server clears documents/jobs.
+- The **online fallback** uses an unofficial, rate-limited free endpoint; it
+  is best-effort. If it is unreachable, offline pairs still work and the UI
+  says so. No text is sent anywhere except that service, and only for pairs
+  that have no local model.
 
 ## License
 

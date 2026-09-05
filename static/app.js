@@ -9,6 +9,8 @@ const state = {
   es: null,           // EventSource
   mode: "bilingual",
   languages: {},
+  localLangs: {},
+  onlineLangs: {},
   pairs: [],
   running: false,
 };
@@ -25,6 +27,26 @@ function toast(msg, isErr = false) {
 }
 
 /* ---------------- bootstrap ---------------- */
+function langOptions(selected) {
+  const local = Object.entries(state.localLangs)
+    .sort((a, b) => a[1].localeCompare(b[1]));
+  const online = Object.entries(state.onlineLangs)
+    .sort((a, b) => a[1].localeCompare(b[1]));
+  let html = "";
+  if (selected) html += `<option value="auto">🔍 Auto-detect</option>`;
+  if (local.length) {
+    html += `<optgroup label="Offline models (local)">` +
+      local.map(([c, n]) => `<option value="${c}">${n}</option>`).join("") +
+      `</optgroup>`;
+  }
+  if (online.length) {
+    html += `<optgroup label="Online — more languages (internet)">` +
+      online.map(([c, n]) => `<option value="${c}">${n}</option>`).join("") +
+      `</optgroup>`;
+  }
+  return html;
+}
+
 async function init() {
   let health;
   try {
@@ -34,6 +56,8 @@ async function init() {
     return;
   }
   state.languages = health.languages;
+  state.localLangs = health.local_languages || {};
+  state.onlineLangs = health.online_languages || {};
 
   const badges = $("#engineBadges");
   badges.innerHTML = "";
@@ -44,24 +68,24 @@ async function init() {
     badges.appendChild(s);
   };
   addBadge(health.engine);
-  addBadge(`${health.models.models_available} models`);
+  addBadge(`${health.models.models_available} local models`);
   if (health.ocr) addBadge("OCR ready");
 
-  const langs = Object.entries(health.languages).sort((a, b) =>
-    a[1].localeCompare(b[1]));
   const src = $("#srcLang"), tgt = $("#tgtLang");
-  src.innerHTML = `<option value="auto">🔍 Auto-detect</option>` +
-    langs.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
-  tgt.innerHTML =
-    langs.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
-  tgt.value = "de";
+  src.innerHTML = langOptions(true);
+  tgt.innerHTML = langOptions(false);
+  const hasTr = "tr" in state.localLangs || "tr" in state.onlineLangs;
+  tgt.value = hasTr ? "tr" : "de";
   src.value = "auto";
 
   try {
     const langsInfo = await (await fetch("/api/languages")).json();
-    state.pairs = langsInfo.pairs;
+    state.pairs = langsInfo.pairs || [];
+    if (!state.localLangs || !Object.keys(state.localLangs).length)
+      state.localLangs = langsInfo.local_languages || {};
     $("#footPairs").textContent =
-      langsInfo.pairs.map((p) => p.replace("-", "→")).join("  ·  ");
+      (state.pairs || []).map((p) => p.replace("-", "→")).join("  ·  ") +
+      `   ·   online: +${Object.keys(state.onlineLangs).length} languages`;
   } catch (e) { /* non-fatal */ }
 
   bindUI();
@@ -109,6 +133,12 @@ function bindUI() {
   });
 }
 
+function localRouteExists(src, tgt) {
+  if (src === tgt) return true;
+  if (state.pairs.includes(`${src}-${tgt}`)) return true;
+  return state.pairs.includes(`${src}-en`) && state.pairs.includes(`en-${tgt}`);
+}
+
 function updatePairHint() {
   const src = $("#srcLang").value, tgt = $("#tgtLang").value;
   const el = $("#pairHint");
@@ -118,10 +148,62 @@ function updatePairHint() {
     return;
   }
   if (src === tgt) { el.textContent = "Same language — the text will be copied."; return; }
-  const direct = state.pairs.includes(`${src}-${tgt}`);
-  el.textContent = direct
-    ? "Direct model available."
-    : "No direct model — will route via English if possible.";
+  if (localRouteExists(src, tgt)) {
+    el.textContent = state.pairs.includes(`${src}-${tgt}`)
+      ? "Offline model available (fast, no internet)."
+      : "Offline — routed via English.";
+    return;
+  }
+  el.classList.add("warn");
+  el.textContent = "No offline model — will translate online via your browser (needs internet).";
+}
+
+/* parse "all" / "1-3,5" → [1..n] or null (all) */
+function parsePageRange(value, pageCount) {
+  value = (value || "").trim();
+  if (!value || value.toLowerCase() === "all") return null;
+  const out = [];
+  for (const part of value.replace(";", ",").split(",")) {
+    const p = part.trim();
+    if (!p) continue;
+    const m = p.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (m) {
+      for (let i = Math.max(1, +m[1]); i <= Math.min(pageCount, +m[2]); i++) out.push(i);
+    } else if (/^\d+$/.test(p)) out.push(+p);
+    else throw new Error(`Bad page range: ${p}`);
+  }
+  return [...new Set(out.filter((p) => p >= 1 && p <= pageCount))];
+}
+
+/* Browser-side online translation (free Google web endpoint). */
+async function browserTranslate(paras, src, tgt, onProgress) {
+  const out = new Array(paras.length).fill("");
+  let detected = src;
+  for (let i = 0; i < paras.length; i += 12) {
+    const chunk = paras.slice(i, i + 12);
+    const qs = new URLSearchParams();
+    qs.set("client", "gtx");
+    qs.set("sl", src === "auto" ? "auto" : src);
+    qs.set("tl", tgt);
+    qs.set("dt", "t");
+    chunk.forEach((t) => qs.append("q", t));
+    let res;
+    try {
+      res = await fetch(
+        "https://translate.googleapis.com/translate_a/single?" + qs.toString());
+    } catch (e) {
+      throw new Error("Cannot reach the online translation service from your browser.");
+    }
+    if (!res.ok) throw new Error(`Online translation failed (HTTP ${res.status}).`);
+    const data = await res.json();
+    if (src === "auto" && data[2]) detected = data[2];
+    chunk.forEach((t, j) => {
+      out[i + j] = t.trim() ? (data[0][j] || []).map((s) => s[0]).join("") : t;
+    });
+    onProgress(Math.min(i + 12, paras.length), paras.length, detected);
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  return { translations: out, detected };
 }
 
 /* ---------------- document upload ---------------- */
@@ -224,33 +306,108 @@ async function renderThumbs(data) {
 /* ---------------- translation ---------------- */
 async function startTranslation() {
   if (!state.doc || state.running) return;
-  const body = {
-    source: $("#srcLang").value,
-    target: $("#tgtLang").value,
-    mode: state.mode,
-    pages: $("#pageRange").value.trim() || "all",
-    ocr: $("#ocrChk").checked,
-  };
+  const source = $("#srcLang").value;
+  const target = $("#tgtLang").value;
+  let pages;
+  try {
+    pages = parsePageRange($("#pageRange").value, state.doc.pages);
+  } catch (e) {
+    toast(e.message, true);
+    return;
+  }
+
   state.running = true;
   $("#translateBtn").disabled = true;
   $("#progressCard").hidden = false;
   setBar(0, "Starting…");
 
+  // local (offline) engine when a model covers the pair, else browser online
+  const useLocal = source === "auto"
+    ? (target in state.localLangs)
+    : localRouteExists(source, target);
+
   try {
-    const res = await fetch(`/api/documents/${state.doc.id}/translate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const job = await res.json();
-    if (!res.ok) throw new Error(job.detail || res.statusText);
-    state.jobId = job.id;
-    connectSSE(job.id);
+    if (useLocal) {
+      const body = {
+        source, target, mode: state.mode,
+        pages: $("#pageRange").value.trim() || "all",
+        ocr: $("#ocrChk").checked,
+        engine: "auto",
+      };
+      const res = await fetch(`/api/documents/${state.doc.id}/translate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const job = await res.json();
+      if (!res.ok) throw new Error(job.detail || res.statusText);
+      state.jobId = job.id;
+      connectSSE(job.id);
+    } else {
+      await runOnlineFlow(source, target, pages);
+    }
   } catch (e) {
     state.running = false;
     $("#translateBtn").disabled = false;
     toast(`Job failed: ${e.message}`, true);
+    setBar(0, "Failed");
   }
+}
+
+async function runOnlineFlow(source, target, pages) {
+  if ((state.doc.scanned_pages || []).length) {
+    throw new Error(
+      "Scanned pages need the offline engine — choose one of the 9 local " +
+      "languages for OCR documents.");
+  }
+  let paras = state.doc.paragraphs || [];
+  if (pages) paras = paras.filter((p) => pages.includes((p.page || 0) + 1));
+  if (!paras.length) throw new Error("No text found on the selected pages.");
+
+  const { translations, detected } = await browserTranslate(
+    paras.map((p) => p.text), source, target,
+    (done, total, det) => {
+      setBar(5 + 80 * (done / total),
+             `Translating online (browser)… ${done}/${total} chunks` +
+             (det && det !== "auto" ? ` · src=${det}` : ""));
+    });
+
+  setBar(90, "Building PDFs on the server…");
+  const body = {
+    source: detected, target, mode: state.mode,
+    paragraphs: paras.map((p, i) => ({
+      text: p.text,
+      translation: translations[i],
+      kind: p.kind,
+      align: p.align,
+      page: p.page,
+      source: p.source,
+    })),
+  };
+  const res = await fetch(`/api/documents/${state.doc.id}/build`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const job = await res.json();
+  if (!res.ok) throw new Error(job.detail || res.statusText);
+  const doneJob = await pollJob(job.id);
+  state.jobId = job.id;
+  state.running = false;
+  $("#translateBtn").disabled = false;
+  setBar(100, "Done");
+  await loadResult(job.id);
+}
+
+async function pollJob(jobId) {
+  for (let i = 0; i < 60; i++) {
+    const j = await (await fetch(`/api/jobs/${jobId}`)).json();
+    if (j.status === "done") return j;
+    if (j.status === "error") throw new Error(j.error || "Build failed");
+    setBar(90 + Math.min(9, i * 0.5), j.message || "Building…");
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  throw new Error("Build timed out");
 }
 
 function connectSSE(jobId) {
@@ -360,6 +517,40 @@ function renderSideBySide(data) {
   sbsBody.appendChild(frag);
 }
 
+async function downloadFile(jobId, fmt, btn) {
+  const names = {
+    bilingual: "bilingual.pdf",
+    translated: "translated.pdf",
+    "txt-bilingual": "bilingual.txt",
+    "txt-translation": "translated.txt",
+    json: "result.json",
+  };
+  try {
+    btn.disabled = true;
+    const res = await fetch(`/api/jobs/${jobId}/download?format=${fmt}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    let name = names[fmt] || fmt;
+    const m = (res.headers.get("Content-Disposition") || "")
+      .match(/filename="?([^";]+)"?/);
+    if (m) name = m[1];
+    // object-URL + download attribute → saved as a file even when the
+    // proxy drops Content-Disposition
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch (e) {
+    toast(`Download failed: ${e.message}`, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function renderDownloads(data) {
   const list = $("#dlList");
   list.innerHTML = "";
@@ -378,10 +569,10 @@ function renderDownloads(data) {
       `<div class="dl-ico">${ico}</div>
        <div><div class="dl-name">${name}</div>
        <div class="dl-sub">${sub}</div></div>`;
-    const btn = document.createElement("a");
+    const btn = document.createElement("button");
     btn.className = "btn";
-    btn.href = `/api/jobs/${jobId}/download?format=${fmt}`;
     btn.textContent = "Download";
+    btn.addEventListener("click", () => downloadFile(jobId, fmt, btn));
     div.appendChild(btn);
     list.appendChild(div);
   }

@@ -16,3 +16,7 @@ output/
 .idea/
 .DS_Store
 .pytest_cache/
+
+# Sandbox-only Qt stub shared objects (would shadow real GL libs on a
+# real machine — keep them local to the sandbox)
+tools/stub-libs/

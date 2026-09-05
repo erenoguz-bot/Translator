@@ -19,8 +19,8 @@ OCR_DPI = 150
 PREVIEW_DPI = 80
 KEEP_JOBS = 20
 
-# Languages supported end-to-end (models + output fonts + detection)
-LANGUAGES = {
+# Languages with local offline models
+LOCAL_LANGUAGES = {
     "en": "English",
     "de": "German",
     "fr": "French",
@@ -31,6 +31,18 @@ LANGUAGES = {
     "ar": "Arabic",
     "zh": "Chinese (Simplified)",
 }
+
+# Extra languages available through the online fallback
+# (see server/online_mt.py)
+ONLINE_LANGUAGES = {}  # filled below to avoid circular import
+try:
+    from .online_mt import ONLINE_LANGUAGES as _ONLINE  # noqa: E402
+    ONLINE_LANGUAGES = dict(_ONLINE)
+except Exception:
+    pass
+
+# Full language list (local + online)
+LANGUAGES = {**ONLINE_LANGUAGES, **LOCAL_LANGUAGES}
 
 # Output fonts per language (reportlab names registered in pdf_writer)
 RTL_LANGS = {"ar"}
