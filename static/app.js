@@ -181,25 +181,48 @@ async function browserTranslate(paras, src, tgt, onProgress) {
   let detected = src;
   for (let i = 0; i < paras.length; i += 12) {
     const chunk = paras.slice(i, i + 12);
-    const qs = new URLSearchParams();
-    qs.set("client", "gtx");
-    qs.set("sl", src === "auto" ? "auto" : src);
-    qs.set("tl", tgt);
-    qs.set("dt", "t");
-    chunk.forEach((t) => qs.append("q", t));
-    let res;
-    try {
-      res = await fetch(
-        "https://translate.googleapis.com/translate_a/single?" + qs.toString());
-    } catch (e) {
-      throw new Error("Cannot reach the online translation service from your browser.");
-    }
-    if (!res.ok) throw new Error(`Online translation failed (HTTP ${res.status}).`);
-    const data = await res.json();
-    if (src === "auto" && data[2]) detected = data[2];
+    // send only non-empty texts; empty strings can make the endpoint
+    // answer with a null payload
+    const idxs = [];
+    const texts = [];
     chunk.forEach((t, j) => {
-      out[i + j] = t.trim() ? (data[0][j] || []).map((s) => s[0]).join("") : t;
+      if (t && t.trim()) { idxs.push(j); texts.push(t); }
     });
+    if (texts.length) {
+      const qs = new URLSearchParams();
+      qs.set("client", "gtx");
+      qs.set("sl", src === "auto" ? "auto" : src);
+      qs.set("tl", tgt);
+      qs.set("dt", "t");
+      texts.forEach((t) => qs.append("q", t));
+      let res;
+      try {
+        res = await fetch(
+          "https://translate.googleapis.com/translate_a/single?" + qs.toString());
+      } catch (e) {
+        throw new Error("Cannot reach the online translation service from your browser.");
+      }
+      if (!res.ok) throw new Error(`Online translation failed (HTTP ${res.status}).`);
+      const raw = await res.text();
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch (e) {
+        throw new Error(
+          `Online service returned an unexpected response: ${raw.slice(0, 100)}`);
+      }
+      if (!Array.isArray(data) || !Array.isArray(data[0])) {
+        throw new Error(
+          `Online service returned an unexpected response: ${raw.slice(0, 100)}`);
+      }
+      if (src === "auto" && data[2]) detected = data[2];
+      idxs.forEach((j, k) => {
+        const row = Array.isArray(data[0][k]) ? data[0][k] : [];
+        out[i + j] = row
+          .map((s) => (s && typeof s[0] === "string" ? s[0] : ""))
+          .join("");
+      });
+    }
     onProgress(Math.min(i + 12, paras.length), paras.length, detected);
     await new Promise((r) => setTimeout(r, 150));
   }
