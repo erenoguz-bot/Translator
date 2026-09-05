@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>PDF Parser &amp; Translator</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>" />
-<link rel="stylesheet" href="/static/style.css?v=2" />
+<link rel="stylesheet" href="/static/style.css?v=5" />
 </head>
 <body>
 <header class="topbar">
@@ -105,6 +105,7 @@
         The parser keeps fonts, headings and alignment; the offline Opus-MT
         engine translates paragraph by paragraph.</p>
       </div>
+      <div id="sbsPager" class="sbs-pager" hidden></div>
       <div id="sbsHead" class="sbs-head" hidden>
         <div class="sbs-col-src" id="sbsSrcHead"></div>
         <div class="sbs-col-tgt" id="sbsTgtHead"></div>
@@ -113,6 +114,16 @@
     </div>
 
     <div class="tabpane" id="pane-downloads" hidden>
+      <div class="preview-block" id="pdfPreviewBlock" hidden>
+        <div class="preview-head">
+          <span>PDF preview — if Download does nothing, save from here</span>
+          <div class="preview-tabs">
+            <button data-pv="bilingual" class="on">Bilingual</button>
+            <button data-pv="translated">Translated</button>
+          </div>
+        </div>
+        <iframe id="pdfFrame" class="pdf-frame" title="PDF preview"></iframe>
+      </div>
       <div id="dlList" class="dl-list"></div>
     </div>
 
@@ -128,6 +139,6 @@
 </footer>
 
 <!-- Bump ?v= whenever app.js / style.css change (hard cache-bust) -->
-<script src="/static/app.js?v=3"></script>
+<script src="/static/app.js?v=5"></script>
 </body>
 </html>

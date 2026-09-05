@@ -339,7 +339,8 @@ _FORMATS = {
 
 
 @app.get("/api/jobs/{job_id}/download")
-def job_download(job_id: str, format: str = Query("bilingual")):
+def job_download(job_id: str, format: str = Query("bilingual"),
+                 inline: bool = False):
     job = STORE.job(job_id)
     if not job:
         raise HTTPException(404, "Job not found.")
@@ -359,8 +360,11 @@ def job_download(job_id: str, format: str = Query("bilingual")):
         "text_translation": "text/plain; charset=utf-8",
         "json": "application/json",
     }[key]
-    return FileResponse(str(path), media_type=media,
-                        filename=path.name)
+    # inline=1 → no Content-Disposition, so browsers render it (used by
+    # the in-page PDF preview)
+    return FileResponse(
+        str(path), media_type=media,
+        filename=None if inline else path.name)
 
 
 # ---------------------------------------------------------------------------

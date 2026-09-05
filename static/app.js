@@ -514,17 +514,54 @@ function esc(s) {
   return d.innerHTML;
 }
 
+let sbsData = null;      // last result payload
+let sbsPages = [];       // 1-based page numbers with content
+let sbsCurrent = null;   // page number, or "all"
+
 function renderSideBySide(data) {
+  sbsData = data;
   const job = data.job || {};
   const srcName = state.languages[job.source_lang] || job.source_lang;
   const tgtName = state.languages[job.target_lang] || job.target_lang;
-  const sbsHead = $("#sbsHead"), sbsBody = $("#sbsBody");
-  sbsHead.hidden = sbsBody.hidden = false;
+  $("#emptyState").hidden = true;
+  $("#sbsHead").hidden = $("#sbsBody").hidden = false;
   $("#sbsSrcHead").textContent = `${srcName} (original)`;
   $("#sbsTgtHead").textContent = `${tgtName} (translated)`;
+
+  sbsPages = [...new Set((data.paragraphs || []).map((p) => (p.page || 0) + 1))]
+    .sort((a, b) => a - b);
+  sbsCurrent = sbsPages.length > 1 ? sbsPages[0] : "all";
+  renderSbsPager();
+  renderSbsRows();
+}
+
+function renderSbsPager() {
+  const pager = $("#sbsPager");
+  pager.innerHTML = "";
+  if (sbsPages.length <= 1) { pager.hidden = true; return; }
+  const mk = (label, val, on) => {
+    const b = document.createElement("button");
+    b.className = "sbs-page-btn" + (on ? " on" : "");
+    b.textContent = label;
+    b.addEventListener("click", () => {
+      sbsCurrent = val;
+      renderSbsPager();
+      renderSbsRows();
+    });
+    pager.appendChild(b);
+  };
+  sbsPages.forEach((p) => mk("p" + p, p, sbsCurrent === p));
+  mk("All pages", "all", sbsCurrent === "all");
+  pager.hidden = false;
+}
+
+function renderSbsRows() {
+  const sbsBody = $("#sbsBody");
+  const rows = (sbsData.paragraphs || []).filter((p) =>
+    sbsCurrent === "all" || (p.page || 0) + 1 === sbsCurrent);
   sbsBody.innerHTML = "";
   const frag = document.createDocumentFragment();
-  for (const p of data.paragraphs) {
+  for (const p of rows) {
     const row = document.createElement("div");
     row.className =
       `sbs-row ${p.kind || "body"} ${p.align === "center" ? "center" : ""}` +
@@ -541,6 +578,7 @@ function renderSideBySide(data) {
 }
 
 async function downloadFile(jobId, fmt, btn) {
+  const url = `/api/jobs/${jobId}/download?format=${fmt}`;
   const names = {
     bilingual: "bilingual.pdf",
     translated: "translated.pdf",
@@ -548,9 +586,18 @@ async function downloadFile(jobId, fmt, btn) {
     "txt-translation": "translated.txt",
     json: "result.json",
   };
+  const prev = btn.textContent;
   try {
     btn.disabled = true;
-    const res = await fetch(`/api/jobs/${jobId}/download?format=${fmt}`);
+    btn.textContent = "Preparing…";
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 60000);
+    let res;
+    try {
+      res = await fetch(url, { signal: ctl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const blob = await res.blob();
     let name = names[fmt] || fmt;
@@ -559,25 +606,40 @@ async function downloadFile(jobId, fmt, btn) {
     if (m) name = m[1];
     // object-URL + download attribute → saved as a file even when the
     // proxy drops Content-Disposition
-    const url = URL.createObjectURL(blob);
+    const objectUrl = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
+    a.href = objectUrl;
     a.download = name;
     document.body.appendChild(a);
     a.click();
     a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 5000);
   } catch (e) {
-    toast(`Download failed: ${e.message}`, true);
+    toast(`Download failed (${e.message}) — opening in a new tab instead.`, true);
+    window.open(url, "_blank");
   } finally {
     btn.disabled = false;
+    btn.textContent = prev;
   }
+}
+
+function setupPdfPreview(jobId) {
+  const block = $("#pdfPreviewBlock");
+  const frame = $("#pdfFrame");
+  block.hidden = false;
+  const tabs = block.querySelectorAll(".preview-tabs button");
+  tabs.forEach((b) => b.addEventListener("click", () => {
+    tabs.forEach((x) => x.classList.toggle("on", x === b));
+    frame.src = `/api/jobs/${jobId}/download?format=${b.dataset.pv}&inline=1`;
+  }));
+  frame.src = `/api/jobs/${jobId}/download?format=bilingual&inline=1`;
 }
 
 function renderDownloads(data) {
   const list = $("#dlList");
   list.innerHTML = "";
   const jobId = data.job.id;
+  setupPdfPreview(jobId);
   const items = [
     ["bilingual", "📑", "Bilingual PDF", "Original + translation, side by side"],
     ["translated", "📄", "Translated PDF", "Document in the target language only"],
@@ -586,6 +648,7 @@ function renderDownloads(data) {
     ["json", "🧩", "JSON export", "Full structured result"],
   ];
   for (const [fmt, ico, name, sub] of items) {
+    const url = `/api/jobs/${jobId}/download?format=${fmt}`;
     const div = document.createElement("div");
     div.className = "dl-item";
     div.innerHTML =
@@ -596,6 +659,12 @@ function renderDownloads(data) {
     btn.className = "btn";
     btn.textContent = "Download";
     btn.addEventListener("click", () => downloadFile(jobId, fmt, btn));
+    const openBtn = document.createElement("button");
+    openBtn.className = "btn ghost";
+    openBtn.textContent = "Open";
+    openBtn.title = "Open the file in a new tab (use this if Download does nothing)";
+    openBtn.addEventListener("click", () => window.open(url, "_blank"));
+    div.appendChild(openBtn);
     div.appendChild(btn);
     list.appendChild(div);
   }
