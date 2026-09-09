@@ -1,91 +1,91 @@
 import sys
 import os
-import pymupdf  # Previously fitz
+import pymupdf
 import qtawesome as qta
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QFileDialog,
                              QLabel, QScrollArea, QToolBar, QMessageBox,
-                             QInputDialog, QDockWidget, QTextEdit, QVBoxLayout,
-                             QWidget, QTabWidget, QListWidget, QListWidgetItem,
-                             QSplitter, QStatusBar, QPushButton, QHBoxLayout)
-from PyQt5.QtGui import QImage, QPixmap, QIcon, QPainter, QPen, QColor
-from PyQt5.QtCore import Qt, QSize, QPoint, QRect
+                             QInputDialog, QDockWidget, QVBoxLayout, QWidget,
+                             QTabWidget, QListWidget, QListWidgetItem, QSplitter,
+                             QStatusBar, QPushButton, QHBoxLayout, QGraphicsView,
+                             QGraphicsScene, QGraphicsPixmapItem, QGraphicsRectItem,
+                             QGraphicsTextItem, QGraphicsItem, QToolButton, QFormLayout,
+                             QSpinBox, QColorDialog, QFrame, QSizePolicy)
+from PyQt5.QtGui import (QImage, QPixmap, QIcon, QPainter, QPen, QColor, QFont,
+                         QBrush, QCursor, QPainterPath)
+from PyQt5.QtCore import Qt, QSize, QPointF, QRectF, pyqtSignal
 
-# Modern Dark Theme QSS
-DARK_THEME_QSS = """
-QMainWindow, QDialog {
-    background-color: #2b2b2b;
-    color: #e0e0e0;
+# --- MODERN THEME (Windows 11 / Fluent Style) ---
+MODERN_THEME_QSS = """
+QMainWindow {
+    background-color: #f3f3f3;
 }
 QToolBar {
-    background-color: #333333;
-    border-bottom: 1px solid #444;
-    padding: 5px;
-}
-QToolBar::separator {
-    width: 1px;
-    background-color: #555;
-    margin: 5px;
+    background-color: #ffffff;
+    border-bottom: 1px solid #dcdcdc;
+    padding: 3px;
+    spacing: 5px;
 }
 QToolButton {
     background-color: transparent;
-    border: 1px solid transparent;
-    padding: 6px;
+    border: none;
+    padding: 5px 10px;
     border-radius: 4px;
-    color: #e0e0e0;
+    font-size: 12px;
+    color: #333333;
 }
 QToolButton:hover {
-    background-color: #444;
-    border: 1px solid #555;
+    background-color: #e5f1fb;
 }
-QToolButton:pressed, QToolButton:checked {
-    background-color: #007acc;
-    border: 1px solid #005c99;
+QToolButton:checked {
+    background-color: #cce4f7;
+    border: 1px solid #0078d4;
 }
+/* Ribbon Tabs */
 QTabWidget::pane {
-    border: 1px solid #444;
-    background: #2b2b2b;
+    border: none;
+    border-top: 1px solid #dcdcdc;
+    background: #ffffff;
 }
 QTabBar::tab {
-    background: #333;
-    color: #aaa;
-    border: 1px solid #444;
-    padding: 8px 20px;
-    margin-right: 2px;
-    border-top-left-radius: 4px;
-    border-top-right-radius: 4px;
+    background: transparent;
+    color: #555555;
+    padding: 6px 16px;
+    border: none;
+    border-bottom: 3px solid transparent;
 }
 QTabBar::tab:selected {
-    background: #2b2b2b;
-    color: #fff;
-    border-bottom-color: #2b2b2b;
+    color: #0078d4;
+    border-bottom: 3px solid #0078d4;
 }
-QListWidget {
-    background-color: #1e1e1e;
-    color: #e0e0e0;
-    border: none;
-}
-QListWidget::item {
-    padding: 10px;
-}
-QListWidget::item:selected {
-    background-color: #007acc;
-    color: white;
+QTabBar::tab:hover {
+    background: #f3f3f3;
 }
 QDockWidget {
-    color: #e0e0e0;
+    color: #333333;
     font-weight: bold;
 }
 QDockWidget::title {
-    background: #333;
-    padding: 5px;
+    background: #eaeaea;
+    padding: 6px;
+    border-bottom: 1px solid #dcdcdc;
+}
+QListWidget {
+    background-color: #fafafa;
+    border: none;
+}
+QListWidget::item:selected {
+    background-color: #cce4f7;
+    color: #000;
+    border: 1px solid #0078d4;
+}
+QGraphicsView {
+    background-color: #cccccc;
+    border: none;
 }
 QStatusBar {
-    background-color: #007acc;
-    color: white;
-}
-QScrollBar:vertical, QScrollBar:horizontal {
-    border: none;
-    background: #2b2b2b;
+    background-color: #ffffff;
+    border-top: 1px solid #dcdcdc;
+    color: #555555;
 }
 """
 
@@ -95,354 +95,380 @@ class PDFDocument:
         self.name = os.path.basename(file_path)
         self.doc = pymupdf.open(file_path)
         self.current_page = 0
-        self.zoom_factor = 1.5
+        self.zoom_factor = 1.0
 
-class InteractiveCanvas(QLabel):
-    def __init__(self, pdf_doc, update_callback, parent_window):
+class PDFGraphicsView(QGraphicsView):
+    def __init__(self, main_window):
         super().__init__()
-        self.pdf_doc = pdf_doc
-        self.update_callback = update_callback
-        self.parent_window = parent_window
+        self.main_window = main_window
+        self.scene = QGraphicsScene(self)
+        self.setScene(self.scene)
 
-        self.setAlignment(Qt.AlignCenter)
-        self.setMouseTracking(True)
+        self.setRenderHint(QPainter.Antialiasing)
+        self.setRenderHint(QPainter.TextAntialiasing)
+        self.setRenderHint(QPainter.SmoothPixmapTransform)
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setDragMode(QGraphicsView.NoDrag)
 
+        self.pdf_pixmap_item = None
+        self.pdf_doc = None
+
+        # Tools: 'select', 'pan', 'highlight', 'text', 'redact', 'ink'
         self.active_tool = 'select'
 
         self.drawing = False
-        self.last_point = QPoint()
-        self.current_ink_points = []
+        self.start_pos = QPointF()
+        self.current_rect_item = None
+        self.current_ink_path = QPainterPath()
+        self.current_ink_item = None
 
-        self.selecting = False
-        self.start_pos = QPoint()
-        self.current_rect = QRect()
+    def set_document(self, pdf_doc):
+        self.pdf_doc = pdf_doc
+        self.render_page()
 
-    def set_active_tool(self, tool_name):
-        self.active_tool = tool_name
-        if tool_name == 'select':
-            self.setCursor(Qt.ArrowCursor)
-        elif tool_name == 'ink':
-            self.setCursor(Qt.CrossCursor)
-        elif tool_name in ['highlight', 'redact']:
-            self.setCursor(Qt.IBeamCursor)
-        elif tool_name in ['edit_text', 'delete_image']:
-            self.setCursor(Qt.PointingHandCursor)
+    def render_page(self):
+        if not self.pdf_doc: return
+        self.scene.clear()
 
-    def map_to_pdf_coord(self, screen_point):
-        if not self.pixmap():
-            return None
-        px_x_offset = (self.width() - self.pixmap().width()) // 2
-        px_y_offset = (self.height() - self.pixmap().height()) // 2
-        real_x = (screen_point.x() - px_x_offset) / self.pdf_doc.zoom_factor
-        real_y = (screen_point.y() - px_y_offset) / self.pdf_doc.zoom_factor
-        return (real_x, real_y)
+        page = self.pdf_doc.doc.load_page(self.pdf_doc.current_page)
+        mat = pymupdf.Matrix(self.pdf_doc.zoom_factor * 2, self.pdf_doc.zoom_factor * 2) # High DPI
+        pix = page.get_pixmap(matrix=mat)
+        img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
+
+        self.pdf_pixmap_item = QGraphicsPixmapItem(QPixmap.fromImage(img))
+        self.scene.addItem(self.pdf_pixmap_item)
+        self.setSceneRect(self.pdf_pixmap_item.boundingRect())
+
+        # Render visual shadow for the page
+        shadow = QGraphicsRectItem(self.pdf_pixmap_item.boundingRect())
+        shadow.setBrush(QColor(0, 0, 0, 0))
+        shadow.setPen(QPen(QColor("#999999"), 2))
+        self.scene.addItem(shadow)
+        shadow.setZValue(10)
+
+    def set_active_tool(self, tool):
+        self.active_tool = tool
+        if tool == 'pan':
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+        else:
+            self.setDragMode(QGraphicsView.NoDrag)
+            if tool == 'select': self.setCursor(Qt.ArrowCursor)
+            elif tool in ['highlight', 'redact']: self.setCursor(Qt.CrossCursor)
+            elif tool == 'text': self.setCursor(Qt.IBeamCursor)
+            elif tool == 'ink': self.setCursor(Qt.CrossCursor)
+
+    def wheelEvent(self, event):
+        if event.modifiers() == Qt.ControlModifier:
+            if event.angleDelta().y() > 0:
+                self.scale(1.1, 1.1)
+            else:
+                self.scale(0.9, 0.9)
+        else:
+            super().wheelEvent(event)
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            if self.active_tool == 'ink':
-                self.drawing = True
-                self.last_point = event.pos()
-                pdf_point = self.map_to_pdf_coord(event.pos())
-                if pdf_point:
-                    self.current_ink_points = [pdf_point]
+        if self.active_tool == 'pan':
+            super().mousePressEvent(event)
+            return
 
-            elif self.active_tool in ['highlight', 'redact']:
-                self.selecting = True
-                self.start_pos = event.pos()
-                self.current_rect = QRect(self.start_pos, self.start_pos)
-                self.update()
+        scene_pos = self.mapToScene(event.pos())
 
-            elif self.active_tool == 'edit_text':
-                pdf_point = self.map_to_pdf_coord(event.pos())
-                if pdf_point:
-                    self.handle_edit_text(pdf_point)
+        if self.active_tool in ['highlight', 'redact']:
+            self.drawing = True
+            self.start_pos = scene_pos
+            self.current_rect_item = QGraphicsRectItem()
+            color = QColor(255, 255, 0, 100) if self.active_tool == 'highlight' else QColor(0, 0, 0, 255)
+            self.current_rect_item.setBrush(QBrush(color))
+            self.current_rect_item.setPen(QPen(Qt.NoPen))
+            self.current_rect_item.setZValue(5)
+            self.scene.addItem(self.current_rect_item)
 
-            elif self.active_tool == 'delete_image':
-                pdf_point = self.map_to_pdf_coord(event.pos())
-                if pdf_point:
-                    self.handle_delete_image(pdf_point)
+        elif self.active_tool == 'ink':
+            self.drawing = True
+            self.start_pos = scene_pos
+            self.current_ink_path = QPainterPath(scene_pos)
+            self.current_ink_item = self.scene.addPath(self.current_ink_path, QPen(Qt.blue, 3 * self.pdf_doc.zoom_factor))
+            self.current_ink_item.setZValue(5)
+
+        elif self.active_tool == 'text':
+            text, ok = QInputDialog.getText(self, 'Metin Ekle', 'Eklenecek metni girin:')
+            if ok and text:
+                text_item = QGraphicsTextItem(text)
+                text_item.setDefaultTextColor(self.main_window.current_text_color)
+                text_item.setFont(QFont("Arial", self.main_window.current_font_size))
+                text_item.setPos(scene_pos)
+                text_item.setFlags(QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemIsSelectable)
+                text_item.setZValue(6)
+                self.scene.addItem(text_item)
+                # Auto switch back to select after placing text
+                self.main_window.set_global_tool('select')
+        else:
+            super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if (event.buttons() & Qt.LeftButton):
-            if self.drawing and self.active_tool == 'ink':
-                pdf_point = self.map_to_pdf_coord(event.pos())
-                if pdf_point:
-                    self.current_ink_points.append(pdf_point)
-                self.last_point = event.pos()
-                self.update()
+        if self.active_tool == 'pan':
+            super().mouseMoveEvent(event)
+            return
 
-            elif self.selecting and self.active_tool in ['highlight', 'redact']:
-                self.current_rect = QRect(self.start_pos, event.pos()).normalized()
-                self.update()
+        scene_pos = self.mapToScene(event.pos())
+
+        if self.drawing and self.active_tool in ['highlight', 'redact']:
+            rect = QRectF(self.start_pos, scene_pos).normalized()
+            self.current_rect_item.setRect(rect)
+
+        elif self.drawing and self.active_tool == 'ink':
+            self.current_ink_path.lineTo(scene_pos)
+            self.current_ink_item.setPath(self.current_ink_path)
+
+        else:
+            super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            if self.drawing and self.active_tool == 'ink':
-                self.drawing = False
-                if len(self.current_ink_points) > 1:
-                    page = self.pdf_doc.doc.load_page(self.pdf_doc.current_page)
-                    annot = page.add_ink_annot([self.current_ink_points])
-                    annot.set_colors(stroke=(0.2, 0.5, 1.0))
-                    annot.update()
-                self.current_ink_points = []
-                self.update_callback()
+        if self.active_tool == 'pan':
+            super().mouseReleaseEvent(event)
+            return
 
-            elif self.selecting and self.active_tool in ['highlight', 'redact']:
-                self.selecting = False
-                page = self.pdf_doc.doc.load_page(self.pdf_doc.current_page)
-                top_left = self.map_to_pdf_coord(self.current_rect.topLeft())
-                bottom_right = self.map_to_pdf_coord(self.current_rect.bottomRight())
+        if self.drawing:
+            self.drawing = False
+            scene_pos = self.mapToScene(event.pos())
 
-                if top_left and bottom_right:
-                    rect = pymupdf.Rect(top_left[0], top_left[1], bottom_right[0], bottom_right[1])
+            # Map GraphicScene coordinates (which are based on high-DPI zoom*2) to raw PDF coordinates
+            page = self.pdf_doc.doc.load_page(self.pdf_doc.current_page)
+            scale_factor = (self.pdf_doc.zoom_factor * 2)
+
+            if self.active_tool in ['highlight', 'redact']:
+                rect = self.current_rect_item.rect()
+                # If area is too small, ignore
+                if rect.width() > 5 and rect.height() > 5:
+                    x0, y0 = rect.left() / scale_factor, rect.top() / scale_factor
+                    x1, y1 = rect.right() / scale_factor, rect.bottom() / scale_factor
+                    pdf_rect = pymupdf.Rect(x0, y0, x1, y1)
+
                     if self.active_tool == 'highlight':
-                        annot = page.add_highlight_annot(rect)
+                        annot = page.add_highlight_annot(pdf_rect)
                         annot.update()
                     elif self.active_tool == 'redact':
-                        page.add_redact_annot(rect, fill=(0, 0, 0))
+                        page.add_redact_annot(pdf_rect, fill=(0, 0, 0))
                         page.apply_redactions()
 
-                self.current_rect = QRect()
-                self.update_callback()
+                # Re-render to show actual PDF burned-in result
+                self.render_page()
 
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        painter = QPainter(self)
-        if self.selecting and self.active_tool in ['highlight', 'redact']:
-            color = QColor(255, 255, 0, 100) if self.active_tool == 'highlight' else QColor(0, 0, 0, 200)
-            painter.setBrush(color)
-            painter.setPen(QPen(Qt.black, 1, Qt.DashLine))
-            painter.drawRect(self.current_rect)
+            elif self.active_tool == 'ink':
+                # Convert QPainterPath to a list of points
+                poly = self.current_ink_path.toFillPolygon()
+                points = []
+                for i in range(poly.count()):
+                    pt = poly.at(i)
+                    points.append(pymupdf.Point(pt.x() / scale_factor, pt.y() / scale_factor))
 
-    def handle_edit_text(self, pt):
+                if len(points) > 1:
+                    annot = page.add_ink_annot([points])
+                    annot.set_colors(stroke=(0, 0, 1)) # Blue
+                    annot.update()
+                self.render_page()
+
+        super().mouseReleaseEvent(event)
+
+    def save_floating_items(self):
+        """Burns QGraphicsTextItem into the PDF before saving"""
+        if not self.pdf_doc: return
         page = self.pdf_doc.doc.load_page(self.pdf_doc.current_page)
-        p = pymupdf.Point(pt[0], pt[1])
-        blocks = page.get_text("dict")["blocks"]
-        for b in blocks:
-            if b['type'] == 0: # Text block
-                r = pymupdf.Rect(b['bbox'])
-                if r.contains(p):
-                    text = ""
-                    for l in b["lines"]:
-                        for s in l["spans"]:
-                            text += s["text"]
+        scale_factor = (self.pdf_doc.zoom_factor * 2)
 
-                    new_text, ok = QInputDialog.getText(self.parent_window, 'Metin Düzenle', 'Yeni metni girin:', text=text)
-                    if ok and new_text != text:
-                        # Gelişmiş düzenleme simülasyonu: Eskisini beyaza boya, yenisini yaz
-                        page.add_redact_annot(r, fill=(1, 1, 1))
-                        page.apply_redactions()
-                        # Yenisini yerleştir (aynı font size ve koordinatlarla yaklaşık olarak)
-                        # Enterprise seviyesinde font eşleştirme çok zordur, standart bir font ile yazıyoruz.
-                        fontsize = b["lines"][0]["spans"][0]["size"]
-                        page.insert_textbox(r, new_text, fontsize=fontsize, fontname="helv", color=(0,0,0))
-                        self.update_callback()
-                        QMessageBox.information(self.parent_window, "Başarılı", "Metin başarıyla değiştirildi.")
-                    return
+        for item in self.scene.items():
+            if isinstance(item, QGraphicsTextItem):
+                x = item.pos().x() / scale_factor
+                y = item.pos().y() / scale_factor
+                # Add 12 to roughly align baseline vs top-left
+                rect = pymupdf.Rect(x, y, x+500, y+500)
 
-    def handle_delete_image(self, pt):
-        page = self.pdf_doc.doc.load_page(self.pdf_doc.current_page)
-        p = pymupdf.Point(pt[0], pt[1])
-        # Resimleri bul ve kontrol et
-        img_list = page.get_image_info()
-        for img in img_list:
-            r = pymupdf.Rect(img['bbox'])
-            if r.contains(p):
-                reply = QMessageBox.question(self.parent_window, 'Görsel Sil', 'Tıklanan görseli PDF üzerinden silmek istediğinize emin misiniz?',
-                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-                if reply == QMessageBox.Yes:
-                    page.add_redact_annot(r, fill=(1, 1, 1))
-                    page.apply_redactions()
-                    self.update_callback()
-                return
-        QMessageBox.information(self.parent_window, "Bilgi", "Bu noktada düzenlenebilir bir görsel veya metin bulunamadı.")
+                color_q = item.defaultTextColor()
+                r, g, b = color_q.redF(), color_q.greenF(), color_q.blueF()
+                fontsize = item.font().pointSize() / scale_factor
 
+                page.insert_textbox(rect, item.toPlainText(), fontsize=fontsize*2, fontname="helv", color=(r,g,b))
+                self.scene.removeItem(item)
+        self.render_page()
 
 class PDFEditor(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Nitro PDF Pro Enterprise - Tam Denetim")
+        self.setWindowTitle("Nitro PDF Pro - Ultimate Edition")
         self.setGeometry(50, 50, 1400, 900)
         self.documents = []
         self.active_doc_idx = -1
 
-        self.setStyleSheet(DARK_THEME_QSS)
+        self.current_font_size = 14
+        self.current_text_color = QColor(0, 0, 0)
+
+        self.setStyleSheet(MODERN_THEME_QSS)
         self.initUI()
 
     def initUI(self):
-        # Üst Ribbon Araç Çubuğu
-        self.toolbar = QToolBar("Ana Ribbon")
-        self.toolbar.setIconSize(QSize(24, 24))
-        self.toolbar.setMovable(False)
-        self.addToolBar(self.toolbar)
+        # 1. Ribbon System
+        self.ribbon = QTabWidget()
+        self.ribbon.setFixedHeight(120)
+        self.setMenuWidget(self.ribbon)
 
-        # --- DOSYA VE SİSTEM GRUBU ---
-        openAct = QAction(qta.icon('fa5s.folder-open', color='white'), 'Aç', self)
-        openAct.triggered.connect(self.openPDF)
-        self.toolbar.addAction(openAct)
+        # --- TAB: ANA SAYFA ---
+        home_tab = QWidget()
+        home_layout = QHBoxLayout(home_tab)
+        home_layout.setAlignment(Qt.AlignLeft)
 
-        saveAct = QAction(qta.icon('fa5s.save', color='white'), 'Kaydet', self)
-        saveAct.triggered.connect(self.savePDF)
-        self.toolbar.addAction(saveAct)
-        self.toolbar.addSeparator()
+        self.btn_open = self.create_ribbon_btn('fa5s.folder-open', 'Dosya Aç')
+        self.btn_open.clicked.connect(self.openPDF)
+        self.btn_save = self.create_ribbon_btn('fa5s.save', 'Kaydet')
+        self.btn_save.clicked.connect(self.savePDF)
 
-        # --- ARAÇ SEÇİM GRUBU ---
-        self.toolGroup = []
+        self.add_ribbon_group(home_layout, "Dosya", [self.btn_open, self.btn_save])
 
-        self.selectAct = QAction(qta.icon('fa5s.mouse-pointer', color='white'), 'Seç', self)
-        self.selectAct.setCheckable(True)
-        self.selectAct.setChecked(True)
-        self.selectAct.triggered.connect(lambda: self.set_global_tool('select'))
-        self.toolbar.addAction(self.selectAct)
-        self.toolGroup.append(self.selectAct)
+        self.btn_select = self.create_ribbon_btn('fa5s.mouse-pointer', 'Seçim', checkable=True, checked=True)
+        self.btn_select.clicked.connect(lambda: self.set_global_tool('select'))
+        self.btn_pan = self.create_ribbon_btn('fa5s.hand-paper', 'Kaydır', checkable=True)
+        self.btn_pan.clicked.connect(lambda: self.set_global_tool('pan'))
 
-        self.editTextAct = QAction(qta.icon('fa5s.edit', color='#4dabf7'), 'Metin Düzenle', self)
-        self.editTextAct.setToolTip("PDF üzerindeki mevcut bir metne tıklayarak değiştirin (Enterprise Edit)")
-        self.editTextAct.setCheckable(True)
-        self.editTextAct.triggered.connect(lambda: self.set_global_tool('edit_text'))
-        self.toolbar.addAction(self.editTextAct)
-        self.toolGroup.append(self.editTextAct)
+        self.add_ribbon_group(home_layout, "Araçlar", [self.btn_select, self.btn_pan])
 
-        self.delImageAct = QAction(qta.icon('fa5s.image', color='#ff6b6b'), 'Görsel Sil', self)
-        self.delImageAct.setToolTip("PDF üzerindeki bir görsele tıklayarak silin")
-        self.delImageAct.setCheckable(True)
-        self.delImageAct.triggered.connect(lambda: self.set_global_tool('delete_image'))
-        self.toolbar.addAction(self.delImageAct)
-        self.toolGroup.append(self.delImageAct)
+        self.btn_zoom_in = self.create_ribbon_btn('fa5s.search-plus', 'Yaklaş')
+        self.btn_zoom_in.clicked.connect(self.zoom_in)
+        self.btn_zoom_out = self.create_ribbon_btn('fa5s.search-minus', 'Uzaklaş')
+        self.btn_zoom_out.clicked.connect(self.zoom_out)
 
-        self.inkAct = QAction(qta.icon('fa5s.pen', color='#4dabf7'), 'Çizim', self)
-        self.inkAct.setToolTip("Sayfa üzerinde serbest çizim yapın")
-        self.inkAct.setCheckable(True)
-        self.inkAct.triggered.connect(lambda: self.set_global_tool('ink'))
-        self.toolbar.addAction(self.inkAct)
-        self.toolGroup.append(self.inkAct)
+        self.add_ribbon_group(home_layout, "Görünüm", [self.btn_zoom_in, self.btn_zoom_out])
 
-        self.highlightAct = QAction(qta.icon('fa5s.highlighter', color='#fcc419'), 'Vurgula', self)
-        self.highlightAct.setToolTip("Fare ile bir alan seçerek sarı renkle vurgulayın")
-        self.highlightAct.setCheckable(True)
-        self.highlightAct.triggered.connect(lambda: self.set_global_tool('highlight'))
-        self.toolbar.addAction(self.highlightAct)
-        self.toolGroup.append(self.highlightAct)
+        self.ribbon.addTab(home_tab, "Ana Sayfa")
 
-        self.redactAct = QAction(qta.icon('fa5s.eraser', color='#ff6b6b'), 'Sansürle', self)
-        self.redactAct.setToolTip("Fare ile seçtiğiniz alanı siyah bir kutuyla kaplayıp gizleyin")
-        self.redactAct.setCheckable(True)
-        self.redactAct.triggered.connect(lambda: self.set_global_tool('redact'))
-        self.toolbar.addAction(self.redactAct)
-        self.toolGroup.append(self.redactAct)
+        # --- TAB: DÜZENLE VE ANOTE ET ---
+        edit_tab = QWidget()
+        edit_layout = QHBoxLayout(edit_tab)
+        edit_layout.setAlignment(Qt.AlignLeft)
 
-        self.toolbar.addSeparator()
+        self.btn_text = self.create_ribbon_btn('fa5s.font', 'Metin Kutusu', checkable=True)
+        self.btn_text.clicked.connect(lambda: self.set_global_tool('text'))
+        self.btn_ink = self.create_ribbon_btn('fa5s.pen', 'Kalem', checkable=True)
+        self.btn_ink.clicked.connect(lambda: self.set_global_tool('ink'))
 
-        addTextAct = QAction(qta.icon('fa5s.font', color='#4dabf7'), 'Yazı Ekle', self)
-        addTextAct.triggered.connect(self.add_text_annotation)
-        self.toolbar.addAction(addTextAct)
+        self.add_ribbon_group(edit_layout, "İçerik", [self.btn_text, self.btn_ink])
 
-        self.toolbar.addSeparator()
+        self.btn_highlight = self.create_ribbon_btn('fa5s.highlighter', 'Vurgula', checkable=True)
+        self.btn_highlight.clicked.connect(lambda: self.set_global_tool('highlight'))
+        self.btn_redact = self.create_ribbon_btn('fa5s.eraser', 'Sansürle', checkable=True)
+        self.btn_redact.clicked.connect(lambda: self.set_global_tool('redact'))
 
-        # --- GÖRÜNÜM & GEZİNME GRUBU ---
-        self.prevPageAct = QAction(qta.icon('fa5s.chevron-left', color='white'), 'Önceki', self)
-        self.prevPageAct.triggered.connect(self.prev_page)
-        self.toolbar.addAction(self.prevPageAct)
+        self.add_ribbon_group(edit_layout, "Güvenlik & İnceleme", [self.btn_highlight, self.btn_redact])
 
-        self.nextPageAct = QAction(qta.icon('fa5s.chevron-right', color='white'), 'Sonraki', self)
-        self.nextPageAct.triggered.connect(self.next_page)
-        self.toolbar.addAction(self.nextPageAct)
+        self.btn_watermark = self.create_ribbon_btn('fa5s.stamp', 'Filigran')
+        self.btn_watermark.clicked.connect(self.add_watermark)
+        self.add_ribbon_group(edit_layout, "Sayfa", [self.btn_watermark])
 
-        zoomInAct = QAction(qta.icon('fa5s.search-plus', color='white'), 'Yakınlaştır', self)
-        zoomInAct.triggered.connect(self.zoom_in)
-        self.toolbar.addAction(zoomInAct)
+        self.ribbon.addTab(edit_tab, "Düzenle & Anote Et")
 
-        zoomOutAct = QAction(qta.icon('fa5s.search-minus', color='white'), 'Uzaklaştır', self)
-        zoomOutAct.triggered.connect(self.zoom_out)
-        self.toolbar.addAction(zoomOutAct)
+        # Keep track of checkable tools
+        self.tools = [self.btn_select, self.btn_pan, self.btn_text, self.btn_ink, self.btn_highlight, self.btn_redact]
 
-        rotateAct = QAction(qta.icon('fa5s.redo', color='white'), 'Döndür', self)
-        rotateAct.triggered.connect(self.rotate_page)
-        self.toolbar.addAction(rotateAct)
-
-        self.toolbar.addSeparator()
-
-        delPageAct = QAction(qta.icon('fa5s.file-excel', color='#ff6b6b'), 'Sayfa Sil', self)
-        delPageAct.triggered.connect(self.delete_current_page)
-        self.toolbar.addAction(delPageAct)
-
-        insertPageAct = QAction(qta.icon('fa5s.file-medical', color='#20c997'), 'Boş Sayfa', self)
-        insertPageAct.triggered.connect(self.insert_blank_page)
-        self.toolbar.addAction(insertPageAct)
-
-        self.toolbar.addSeparator()
-
-        infoAct = QAction(qta.icon('fa5s.info-circle', color='white'), 'Bilgi', self)
-        infoAct.triggered.connect(self.show_info)
-        self.toolbar.addAction(infoAct)
-
-        # Arayüz Yapısı
+        # 2. Main Interface
         main_splitter = QSplitter(Qt.Horizontal)
         self.setCentralWidget(main_splitter)
 
-        # Sol Taraf: Sayfa Önizlemeleri (Thumbnails)
+        # Left Panel (Thumbnails)
         self.thumbnail_list = QListWidget()
-        self.thumbnail_list.setIconSize(QSize(120, 160))
+        self.thumbnail_list.setIconSize(QSize(100, 140))
         self.thumbnail_list.setResizeMode(QListWidget.Adjust)
         self.thumbnail_list.itemClicked.connect(self.thumbnail_clicked)
 
         left_dock = QDockWidget("Sayfalar", self)
         left_dock.setWidget(self.thumbnail_list)
+        left_dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
         self.addDockWidget(Qt.LeftDockWidgetArea, left_dock)
 
-        # Orta: Sekmeli Görüntüleyici
+        # Center (Tabs of QGraphicsView)
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(True)
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.tabs.currentChanged.connect(self.tab_changed)
         main_splitter.addWidget(self.tabs)
 
-        # Status Bar
-        self.statusbar = QStatusBar()
-        self.setStatusBar(self.statusbar)
-        self.page_info_label = QLabel("Sayfa: 0 / 0")
-        self.zoom_info_label = QLabel("Zoom: 100%")
-        self.tool_info_label = QLabel("Aktif Araç: Seçim")
-        self.statusbar.addPermanentWidget(self.tool_info_label)
-        self.statusbar.addPermanentWidget(self.page_info_label)
-        self.statusbar.addPermanentWidget(self.zoom_info_label)
+        # Right Panel (Properties)
+        self.right_dock = QDockWidget("Özellikler", self)
+        self.right_dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
+
+        prop_widget = QWidget()
+        prop_layout = QFormLayout(prop_widget)
+
+        self.spin_fontsize = QSpinBox()
+        self.spin_fontsize.setRange(8, 72)
+        self.spin_fontsize.setValue(14)
+        self.spin_fontsize.valueChanged.connect(self.change_font_size)
+        prop_layout.addRow("Yazı Tipi Boyutu:", self.spin_fontsize)
+
+        self.btn_color = QPushButton("Renk Seç")
+        self.btn_color.setStyleSheet("background-color: black; color: white;")
+        self.btn_color.clicked.connect(self.choose_color)
+        prop_layout.addRow("Yazı Rengi:", self.btn_color)
+
+        self.right_dock.setWidget(prop_widget)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.right_dock)
+
+        main_splitter.setSizes([200, 900, 250])
+
+    def create_ribbon_btn(self, icon_name, text, checkable=False, checked=False):
+        btn = QToolButton()
+        # Windows fluent blue icon colors for elegance
+        btn.setIcon(qta.icon(icon_name, color='#0078d4'))
+        btn.setText(text)
+        btn.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        if checkable:
+            btn.setCheckable(True)
+            btn.setChecked(checked)
+        return btn
+
+    def add_ribbon_group(self, layout, title, buttons):
+        group_widget = QWidget()
+        group_layout = QVBoxLayout(group_widget)
+        group_layout.setContentsMargins(5, 0, 5, 0)
+        group_layout.setSpacing(2)
+
+        btn_layout = QHBoxLayout()
+        for btn in buttons:
+            btn_layout.addWidget(btn)
+
+        group_layout.addLayout(btn_layout)
+
+        lbl = QLabel(title)
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setStyleSheet("color: #777; font-size: 10px; font-weight: normal;")
+        group_layout.addWidget(lbl)
+
+        line = QFrame()
+        line.setFrameShape(QFrame.VLine)
+        line.setFrameShadow(QFrame.Sunken)
+        line.setStyleSheet("color: #dcdcdc;")
+
+        layout.addWidget(group_widget)
+        layout.addWidget(line)
 
     def set_global_tool(self, tool_name):
-        for action in self.toolGroup:
-            if action.text() == 'Seç' and tool_name == 'select': action.setChecked(True)
-            elif action.text() == 'Metin Düzenle' and tool_name == 'edit_text': action.setChecked(True)
-            elif action.text() == 'Görsel Sil' and tool_name == 'delete_image': action.setChecked(True)
-            elif action.text() == 'Çizim' and tool_name == 'ink': action.setChecked(True)
-            elif action.text() == 'Vurgula' and tool_name == 'highlight': action.setChecked(True)
-            elif action.text() == 'Sansürle' and tool_name == 'redact': action.setChecked(True)
-            else: action.setChecked(False)
+        for btn in self.tools:
+            btn.setChecked(False)
 
-        tool_texts = {'select': 'Seçim', 'edit_text': 'Tıklayarak Metin Düzenleme', 'delete_image': 'Tıklayarak Görsel Silme',
-                      'ink': 'Serbest Çizim', 'highlight': 'Seçim Vurgulama', 'redact': 'Kutu Sansürleme'}
-        self.tool_info_label.setText(f"Aktif Araç: {tool_texts.get(tool_name, 'Bilinmiyor')}")
+        if tool_name == 'select': self.btn_select.setChecked(True)
+        elif tool_name == 'pan': self.btn_pan.setChecked(True)
+        elif tool_name == 'text': self.btn_text.setChecked(True)
+        elif tool_name == 'ink': self.btn_ink.setChecked(True)
+        elif tool_name == 'highlight': self.btn_highlight.setChecked(True)
+        elif tool_name == 'redact': self.btn_redact.setChecked(True)
 
         for i in range(self.tabs.count()):
-            scroll_area = self.tabs.widget(i)
-            canvas = scroll_area.widget()
-            if isinstance(canvas, InteractiveCanvas):
-                canvas.set_active_tool(tool_name)
+            view = self.tabs.widget(i)
+            if isinstance(view, PDFGraphicsView):
+                view.set_active_tool(tool_name)
 
-    def get_active_doc(self):
-        if 0 <= self.active_doc_idx < len(self.documents):
-            return self.documents[self.active_doc_idx]
-        return None
-
-    def get_active_scroll_area(self):
-        if self.tabs.count() > 0 and self.active_doc_idx != -1:
+    def get_active_view(self):
+        if self.tabs.count() > 0:
             return self.tabs.currentWidget()
         return None
-
-    def update_ui_state(self):
-        has_doc = self.get_active_doc() is not None
-        if not has_doc:
-            self.thumbnail_list.clear()
-            self.page_info_label.setText("Sayfa: 0 / 0")
-            self.zoom_info_label.setText("Zoom: 100%")
 
     def openPDF(self):
         fileName, _ = QFileDialog.getOpenFileName(self, "PDF Aç", "", "PDF Dosyaları (*.pdf)")
@@ -452,77 +478,49 @@ class PDFEditor(QMainWindow):
                 self.documents.append(pdf_doc)
                 self.active_doc_idx = len(self.documents) - 1
 
-                scroll_area = QScrollArea()
-                canvas = InteractiveCanvas(pdf_doc, self.render_current_page, self)
-                scroll_area.setStyleSheet("background-color: #1e1e1e;")
-                scroll_area.setWidget(canvas)
-                scroll_area.setWidgetResizable(True)
+                view = PDFGraphicsView(self)
+                view.set_document(pdf_doc)
 
-                idx = self.tabs.addTab(scroll_area, pdf_doc.name)
+                idx = self.tabs.addTab(view, pdf_doc.name)
                 self.tabs.setCurrentIndex(idx)
 
-                active_tool = 'select'
-                for action in self.toolGroup:
-                    if action.isChecked():
-                        if action.text() == 'Çizim': active_tool = 'ink'
-                        elif action.text() == 'Vurgula': active_tool = 'highlight'
-                        elif action.text() == 'Sansürle': active_tool = 'redact'
-                        elif action.text() == 'Metin Düzenle': active_tool = 'edit_text'
-                        elif action.text() == 'Görsel Sil': active_tool = 'delete_image'
-                canvas.set_active_tool(active_tool)
-
                 self.load_thumbnails()
-                self.render_current_page()
-                self.update_ui_state()
             except Exception as e:
                 QMessageBox.critical(self, "Hata", f"Dosya açılamadı:\n{e}")
-
-    def close_current_tab(self):
-        idx = self.tabs.currentIndex()
-        if idx != -1:
-            self.close_tab(idx)
 
     def close_tab(self, index):
         if 0 <= index < len(self.documents):
             doc_to_close = self.documents.pop(index)
             doc_to_close.doc.close()
-
-            widget_to_remove = self.tabs.widget(index)
+            widget = self.tabs.widget(index)
             self.tabs.removeTab(index)
-            if widget_to_remove:
-                widget_to_remove.deleteLater()
-
-            if len(self.documents) == 0:
-                self.active_doc_idx = -1
-            else:
-                self.active_doc_idx = self.tabs.currentIndex()
-
+            if widget: widget.deleteLater()
             self.load_thumbnails()
-            self.update_ui_state()
 
     def tab_changed(self, index):
         if index != -1 and len(self.documents) > 0:
             self.active_doc_idx = index
             self.load_thumbnails()
-            self.render_current_page()
-            self.update_ui_state()
 
     def savePDF(self):
-        pdf_doc = self.get_active_doc()
-        if pdf_doc:
-            fileName, _ = QFileDialog.getSaveFileName(self, "PDF'i Kaydet", pdf_doc.name, "PDF Dosyaları (*.pdf)")
+        view = self.get_active_view()
+        if view and view.pdf_doc:
+            # Burn graphics items into PDF before saving
+            view.save_floating_items()
+            fileName, _ = QFileDialog.getSaveFileName(self, "PDF'i Kaydet", view.pdf_doc.name, "PDF Dosyaları (*.pdf)")
             if fileName:
                 try:
-                    pdf_doc.doc.save(fileName)
-                    QMessageBox.information(self, "Başarılı", "Tüm gelişmiş düzenlemeler PDF'e kalıcı olarak işlendi.")
+                    view.pdf_doc.doc.save(fileName)
+                    QMessageBox.information(self, "Başarılı", "Tüm profesyonel düzenlemeler PDF'e işlendi.")
                 except Exception as e:
                     QMessageBox.critical(self, "Hata", f"Kaydetme hatası:\n{e}")
 
     def load_thumbnails(self):
         self.thumbnail_list.clear()
-        pdf_doc = self.get_active_doc()
-        if not pdf_doc: return
+        view = self.get_active_view()
+        if not view or not view.pdf_doc: return
 
+        pdf_doc = view.pdf_doc
         num_pages = min(len(pdf_doc.doc), 50)
         for i in range(num_pages):
             page = pdf_doc.doc.load_page(i)
@@ -534,112 +532,61 @@ class PDFEditor(QMainWindow):
             item = QListWidgetItem(icon, f"Sayfa {i+1}")
             item.setTextAlignment(Qt.AlignCenter)
             item.setData(Qt.UserRole, i)
+            if i == pdf_doc.current_page:
+                item.setSelected(True)
             self.thumbnail_list.addItem(item)
 
     def thumbnail_clicked(self, item):
         page_idx = item.data(Qt.UserRole)
         if page_idx is not None:
-            pdf_doc = self.get_active_doc()
-            if pdf_doc:
-                pdf_doc.current_page = page_idx
-                self.render_current_page()
-
-    def render_current_page(self):
-        pdf_doc = self.get_active_doc()
-        scroll_area = self.get_active_scroll_area()
-        if not pdf_doc or not scroll_area: return
-
-        if pdf_doc.current_page >= len(pdf_doc.doc):
-            pdf_doc.current_page = max(0, len(pdf_doc.doc) - 1)
-
-        page = pdf_doc.doc.load_page(pdf_doc.current_page)
-        mat = pymupdf.Matrix(pdf_doc.zoom_factor, pdf_doc.zoom_factor)
-        pix = page.get_pixmap(matrix=mat)
-        img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
-
-        canvas = scroll_area.widget()
-        canvas.setPixmap(QPixmap.fromImage(img))
-
-        self.page_info_label.setText(f"Sayfa: {pdf_doc.current_page + 1} / {len(pdf_doc.doc)}")
-        self.zoom_info_label.setText(f"Zoom: {int(pdf_doc.zoom_factor * 100)}%")
-
-        if pdf_doc.current_page < self.thumbnail_list.count():
-            self.thumbnail_list.setCurrentRow(pdf_doc.current_page)
+            view = self.get_active_view()
+            if view and view.pdf_doc:
+                # Save items from current page before switching
+                view.save_floating_items()
+                view.pdf_doc.current_page = page_idx
+                view.render_page()
 
     def zoom_in(self):
-        pdf_doc = self.get_active_doc()
-        if pdf_doc:
-            pdf_doc.zoom_factor *= 1.2
-            self.render_current_page()
+        view = self.get_active_view()
+        if view:
+            view.scale(1.2, 1.2)
 
     def zoom_out(self):
-        pdf_doc = self.get_active_doc()
-        if pdf_doc:
-            pdf_doc.zoom_factor /= 1.2
-            self.render_current_page()
+        view = self.get_active_view()
+        if view:
+            view.scale(1/1.2, 1/1.2)
 
-    def rotate_page(self):
-        pdf_doc = self.get_active_doc()
-        if pdf_doc:
-            page = pdf_doc.doc.load_page(pdf_doc.current_page)
-            page.set_rotation((page.rotation + 90) % 360)
-            self.render_current_page()
-            self.load_thumbnails()
-
-    def add_text_annotation(self):
-        pdf_doc = self.get_active_doc()
-        if pdf_doc:
-            text, ok = QInputDialog.getText(self, 'Metin Ekle', 'Eklenecek metni girin:')
+    def add_watermark(self):
+        view = self.get_active_view()
+        if view and view.pdf_doc:
+            text, ok = QInputDialog.getText(self, 'Filigran', 'Filigran metni (Örn: TASLAK):')
             if ok and text:
-                page = pdf_doc.doc.load_page(pdf_doc.current_page)
-                rect = pymupdf.Rect(100, 100, 400, 150)
-                annot = page.add_freetext_annot(rect, text, fontsize=16, fontname="helv", text_color=(1, 0, 0))
-                annot.update()
-                self.render_current_page()
-
-    def delete_current_page(self):
-        pdf_doc = self.get_active_doc()
-        if pdf_doc and len(pdf_doc.doc) > 1:
-            reply = QMessageBox.question(self, 'Onay', 'Geçerli sayfayı silmek istediğinize emin misiniz?',
-                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if reply == QMessageBox.Yes:
-                pdf_doc.doc.delete_page(pdf_doc.current_page)
+                for page_idx in range(len(view.pdf_doc.doc)):
+                    page = view.pdf_doc.doc.load_page(page_idx)
+                    rect = page.rect
+                    page.insert_text((rect.width/4, rect.height/2), text, fontsize=96,
+                                     color=(0.9, 0.9, 0.9), rotate=45)
+                view.render_page()
                 self.load_thumbnails()
-                self.render_current_page()
-        elif pdf_doc:
-            QMessageBox.warning(self, "Uyarı", "Son kalan sayfayı silemezsiniz!")
 
-    def insert_blank_page(self):
-        pdf_doc = self.get_active_doc()
-        if pdf_doc:
-            pdf_doc.doc.insert_page(pdf_doc.current_page + 1)
-            pdf_doc.current_page += 1
-            self.load_thumbnails()
-            self.render_current_page()
+    def change_font_size(self, val):
+        self.current_font_size = val
+        view = self.get_active_view()
+        if view:
+            for item in view.scene.selectedItems():
+                if isinstance(item, QGraphicsTextItem):
+                    item.setFont(QFont("Arial", val))
 
-    def prev_page(self):
-        pdf_doc = self.get_active_doc()
-        if pdf_doc and pdf_doc.current_page > 0:
-            pdf_doc.current_page -= 1
-            self.render_current_page()
-
-    def next_page(self):
-        pdf_doc = self.get_active_doc()
-        if pdf_doc and pdf_doc.current_page < len(pdf_doc.doc) - 1:
-            pdf_doc.current_page += 1
-            self.render_current_page()
-
-    def show_info(self):
-        pdf_doc = self.get_active_doc()
-        if pdf_doc:
-            info = pdf_doc.doc.metadata
-            info_text = (
-                f"<b>Dosya:</b> {pdf_doc.name}<br>"
-                f"<b>Sayfa:</b> {len(pdf_doc.doc)}<br>"
-                f"<b>Başlık:</b> {info.get('title', 'Bilinmiyor')}<br>"
-                f"<b>Format:</b> {info.get('format', 'PDF')}"
-            )
-            QMessageBox.information(self, "Belge Bilgisi", info_text)
+    def choose_color(self):
+        color = QColorDialog.getColor(self.current_text_color, self)
+        if color.isValid():
+            self.current_text_color = color
+            self.btn_color.setStyleSheet(f"background-color: {color.name()}; color: {'white' if color.lightness() < 128 else 'black'};")
+            view = self.get_active_view()
+            if view:
+                for item in view.scene.selectedItems():
+                    if isinstance(item, QGraphicsTextItem):
+                        item.setDefaultTextColor(color)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
