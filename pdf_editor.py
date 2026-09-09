@@ -261,7 +261,7 @@ class PDFGraphicsView(QGraphicsView):
                 points = []
                 for i in range(poly.count()):
                     pt = poly.at(i)
-                    points.append(pymupdf.Point(pt.x() / scale_factor, pt.y() / scale_factor))
+                    points.append((pt.x() / scale_factor, pt.y() / scale_factor))
 
                 if len(points) > 1:
                     annot = page.add_ink_annot([points])
