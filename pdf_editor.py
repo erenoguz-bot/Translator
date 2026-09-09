@@ -565,7 +565,7 @@ class PDFEditor(QMainWindow):
                     page = view.pdf_doc.doc.load_page(page_idx)
                     rect = page.rect
                     page.insert_text((rect.width/4, rect.height/2), text, fontsize=96,
-                                     color=(0.9, 0.9, 0.9), rotate=45)
+                                     color=(0.9, 0.9, 0.9), morph=(pymupdf.Point(rect.width/4, rect.height/2), pymupdf.Matrix(-45)))
                 view.render_page()
                 self.load_thumbnails()
 
