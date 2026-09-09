@@ -363,7 +363,7 @@ class PDFEditor(QMainWindow):
         self.btn_watermark.clicked.connect(self.add_watermark)
         self.add_ribbon_group(edit_layout, "Sayfa", [self.btn_watermark])
 
-        self.ribbon.addTab(edit_tab, "Düzenle ve Anote Et")
+        self.ribbon.addTab(edit_tab, "Düzenle")
 
         # Keep track of checkable tools
         self.tools = [self.btn_select, self.btn_pan, self.btn_text, self.btn_ink, self.btn_highlight, self.btn_redact]
