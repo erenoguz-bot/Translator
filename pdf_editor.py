@@ -1,5 +1,7 @@
 import sys
 import os
+import tempfile
+import shutil
 import pymupdf
 import qtawesome as qta
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QFileDialog,
@@ -9,7 +11,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QFileDialog,
                              QStatusBar, QPushButton, QHBoxLayout, QGraphicsView,
                              QGraphicsScene, QGraphicsPixmapItem, QGraphicsRectItem,
                              QGraphicsTextItem, QGraphicsItem, QToolButton, QFormLayout,
-                             QSpinBox, QColorDialog, QFrame, QSizePolicy)
+                             QSpinBox, QColorDialog, QFrame, QSizePolicy, QMenu)
 from PyQt5.QtGui import (QImage, QPixmap, QIcon, QPainter, QPen, QColor, QFont,
                          QBrush, QCursor, QPainterPath)
 from PyQt5.QtCore import Qt, QSize, QPointF, QRectF, pyqtSignal
@@ -167,6 +169,14 @@ class PDFGraphicsView(QGraphicsView):
         else:
             super().wheelEvent(event)
 
+    def keyPressEvent(self, event):
+        """Allow deleting selected text items using the Delete key"""
+        if event.key() == Qt.Key_Delete and self.active_tool == 'select':
+            for item in self.scene.selectedItems():
+                if isinstance(item, QGraphicsTextItem):
+                    self.scene.removeItem(item)
+        super().keyPressEvent(event)
+
     def mousePressEvent(self, event):
         if self.active_tool == 'pan':
             super().mousePressEvent(event)
@@ -233,13 +243,11 @@ class PDFGraphicsView(QGraphicsView):
             self.drawing = False
             scene_pos = self.mapToScene(event.pos())
 
-            # Map GraphicScene coordinates (which are based on high-DPI zoom*2) to raw PDF coordinates
             page = self.pdf_doc.doc.load_page(self.pdf_doc.current_page)
             scale_factor = (self.pdf_doc.zoom_factor * 2)
 
             if self.active_tool in ['highlight', 'redact']:
                 rect = self.current_rect_item.rect()
-                # If area is too small, ignore
                 if rect.width() > 5 and rect.height() > 5:
                     x0, y0 = rect.left() / scale_factor, rect.top() / scale_factor
                     x1, y1 = rect.right() / scale_factor, rect.bottom() / scale_factor
@@ -252,11 +260,9 @@ class PDFGraphicsView(QGraphicsView):
                         page.add_redact_annot(pdf_rect, fill=(0, 0, 0))
                         page.apply_redactions()
 
-                # Re-render to show actual PDF burned-in result
                 self.render_page()
 
             elif self.active_tool == 'ink':
-                # Convert QPainterPath to a list of points
                 poly = self.current_ink_path.toFillPolygon()
                 points = []
                 for i in range(poly.count()):
@@ -271,6 +277,24 @@ class PDFGraphicsView(QGraphicsView):
 
         super().mouseReleaseEvent(event)
 
+    def contextMenuEvent(self, event):
+        """Hızlı araç değişimi için sağ tık menüsü"""
+        menu = QMenu(self)
+
+        act_sel = menu.addAction("Ok Aracı (Seçim)")
+        act_pan = menu.addAction("Kaydır (Pan)")
+        act_ink = menu.addAction("Kalem (Serbest Çizim)")
+        act_high = menu.addAction("Vurgula (Sarı)")
+        act_redact = menu.addAction("Sansürle (Siyah Kutu)")
+
+        action = menu.exec_(self.mapToGlobal(event.pos()))
+
+        if action == act_sel: self.main_window.set_global_tool('select')
+        elif action == act_pan: self.main_window.set_global_tool('pan')
+        elif action == act_ink: self.main_window.set_global_tool('ink')
+        elif action == act_high: self.main_window.set_global_tool('highlight')
+        elif action == act_redact: self.main_window.set_global_tool('redact')
+
     def save_floating_items(self):
         """Burns QGraphicsTextItem into the PDF before saving"""
         if not self.pdf_doc: return
@@ -281,14 +305,13 @@ class PDFGraphicsView(QGraphicsView):
             if isinstance(item, QGraphicsTextItem):
                 x = item.pos().x() / scale_factor
                 y = item.pos().y() / scale_factor
-                # Add 12 to roughly align baseline vs top-left
                 rect = pymupdf.Rect(x, y, x+500, y+500)
 
                 color_q = item.defaultTextColor()
                 r, g, b = color_q.redF(), color_q.greenF(), color_q.blueF()
                 fontsize = item.font().pointSize() / scale_factor
 
-                page.insert_textbox(rect, item.toPlainText(), fontsize=fontsize*2, fontname="helv", color=(r,g,b))
+                page.insert_textbox(rect, item.toPlainText(), fontsize=fontsize, fontname="helv", color=(r,g,b))
                 self.scene.removeItem(item)
         self.render_page()
 
@@ -302,6 +325,8 @@ class PDFEditor(QMainWindow):
 
         self.current_font_size = 14
         self.current_text_color = QColor(0, 0, 0)
+
+        self.setAcceptDrops(True) # Drag and drop active
 
         self.setStyleSheet(MODERN_THEME_QSS)
         self.initUI()
@@ -318,7 +343,7 @@ class PDFEditor(QMainWindow):
         home_layout.setAlignment(Qt.AlignLeft)
 
         self.btn_open = self.create_ribbon_btn('fa5s.folder-open', 'Dosya Aç')
-        self.btn_open.clicked.connect(self.openPDF)
+        self.btn_open.clicked.connect(self.openPDF_dialog)
         self.btn_save = self.create_ribbon_btn('fa5s.save', 'Kaydet')
         self.btn_save.clicked.connect(self.savePDF)
 
@@ -340,7 +365,7 @@ class PDFEditor(QMainWindow):
 
         self.ribbon.addTab(home_tab, "Ana Sayfa")
 
-        # --- TAB: DÜZENLE VE ANOTE ET ---
+        # --- TAB: DÜZENLE ---
         edit_tab = QWidget()
         edit_layout = QHBoxLayout(edit_tab)
         edit_layout.setAlignment(Qt.AlignLeft)
@@ -359,9 +384,12 @@ class PDFEditor(QMainWindow):
 
         self.add_ribbon_group(edit_layout, "Güvenlik & İnceleme", [self.btn_highlight, self.btn_redact])
 
+        self.btn_merge = self.create_ribbon_btn('fa5s.object-group', 'PDF Birleştir')
+        self.btn_merge.clicked.connect(self.merge_pdf)
+
         self.btn_watermark = self.create_ribbon_btn('fa5s.stamp', 'Filigran')
         self.btn_watermark.clicked.connect(self.add_watermark)
-        self.add_ribbon_group(edit_layout, "Sayfa", [self.btn_watermark])
+        self.add_ribbon_group(edit_layout, "Sayfa", [self.btn_merge, self.btn_watermark])
 
         self.ribbon.addTab(edit_tab, "Düzenle")
 
@@ -376,6 +404,8 @@ class PDFEditor(QMainWindow):
         self.thumbnail_list = QListWidget()
         self.thumbnail_list.setIconSize(QSize(100, 140))
         self.thumbnail_list.setResizeMode(QListWidget.Adjust)
+        self.thumbnail_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.thumbnail_list.customContextMenuRequested.connect(self.show_thumbnail_context_menu)
         self.thumbnail_list.itemClicked.connect(self.thumbnail_clicked)
 
         left_dock = QDockWidget("Sayfalar", self)
@@ -413,9 +443,21 @@ class PDFEditor(QMainWindow):
 
         main_splitter.setSizes([200, 900, 250])
 
+    # --- SÜRÜKLE BIRAK (DRAG & DROP) ---
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.accept()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        for url in event.mimeData().urls():
+            file_path = url.toLocalFile()
+            if file_path.lower().endswith('.pdf'):
+                self.open_file(file_path)
+
     def create_ribbon_btn(self, icon_name, text, checkable=False, checked=False):
         btn = QToolButton()
-        # Windows fluent blue icon colors for elegance
         btn.setIcon(qta.icon(icon_name, color='#0078d4'))
         btn.setText(text)
         btn.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
@@ -470,23 +512,26 @@ class PDFEditor(QMainWindow):
             return self.tabs.currentWidget()
         return None
 
-    def openPDF(self):
+    def openPDF_dialog(self):
         fileName, _ = QFileDialog.getOpenFileName(self, "PDF Aç", "", "PDF Dosyaları (*.pdf)")
         if fileName:
-            try:
-                pdf_doc = PDFDocument(fileName)
-                self.documents.append(pdf_doc)
-                self.active_doc_idx = len(self.documents) - 1
+            self.open_file(fileName)
 
-                view = PDFGraphicsView(self)
-                view.set_document(pdf_doc)
+    def open_file(self, file_path):
+        try:
+            pdf_doc = PDFDocument(file_path)
+            self.documents.append(pdf_doc)
+            self.active_doc_idx = len(self.documents) - 1
 
-                idx = self.tabs.addTab(view, pdf_doc.name)
-                self.tabs.setCurrentIndex(idx)
+            view = PDFGraphicsView(self)
+            view.set_document(pdf_doc)
 
-                self.load_thumbnails()
-            except Exception as e:
-                QMessageBox.critical(self, "Hata", f"Dosya açılamadı:\n{e}")
+            idx = self.tabs.addTab(view, pdf_doc.name)
+            self.tabs.setCurrentIndex(idx)
+
+            self.load_thumbnails()
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", f"Dosya açılamadı:\n{e}")
 
     def close_tab(self, index):
         if 0 <= index < len(self.documents):
@@ -510,10 +555,36 @@ class PDFEditor(QMainWindow):
             fileName, _ = QFileDialog.getSaveFileName(self, "PDF'i Kaydet", view.pdf_doc.name, "PDF Dosyaları (*.pdf)")
             if fileName:
                 try:
-                    view.pdf_doc.doc.save(fileName)
+
+                    if fileName == view.pdf_doc.file_path:
+                        # Eğer açık olan dosyanın üstüne yazmak isterse, PyMuPDF izin vermez.
+                        # Bu yüzden temp dosyaya kaydedip üstüne kopyalıyoruz.
+                        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
+                        os.close(tmp_fd)
+                        view.pdf_doc.doc.save(tmp_path)
+                        # Reload from temp so we can overwrite original
+                        view.pdf_doc.doc.close()
+                        shutil.move(tmp_path, fileName)
+                        view.pdf_doc.doc = pymupdf.open(fileName)
+                    else:
+                        view.pdf_doc.doc.save(fileName)
                     QMessageBox.information(self, "Başarılı", "Tüm profesyonel düzenlemeler PDF'e işlendi.")
                 except Exception as e:
                     QMessageBox.critical(self, "Hata", f"Kaydetme hatası:\n{e}")
+
+    def merge_pdf(self):
+        """Geçerli belgenin sonuna yeni bir PDF ekler"""
+        view = self.get_active_view()
+        if view and view.pdf_doc:
+            fileName, _ = QFileDialog.getOpenFileName(self, "Birleştirilecek PDF'i Seçin", "", "PDF Dosyaları (*.pdf)")
+            if fileName:
+                try:
+                    doc_to_insert = pymupdf.open(fileName)
+                    view.pdf_doc.doc.insert_pdf(doc_to_insert)
+                    self.load_thumbnails()
+                    QMessageBox.information(self, "Başarılı", f"'{os.path.basename(fileName)}' belgeye eklendi.")
+                except Exception as e:
+                    QMessageBox.critical(self, "Hata", f"Birleştirme hatası:\n{e}")
 
     def load_thumbnails(self):
         self.thumbnail_list.clear()
@@ -545,6 +616,44 @@ class PDFEditor(QMainWindow):
                 view.save_floating_items()
                 view.pdf_doc.current_page = page_idx
                 view.render_page()
+
+    def show_thumbnail_context_menu(self, pos):
+        """Thumbnail üzerinde sağ tık ile sayfa düzenleme menüsü"""
+        view = self.get_active_view()
+        if not view or not view.pdf_doc: return
+
+        item = self.thumbnail_list.itemAt(pos)
+        if not item: return
+
+        page_idx = item.data(Qt.UserRole)
+
+        menu = QMenu(self)
+        del_action = menu.addAction("Sayfayı Sil")
+        up_action = menu.addAction("Sayfayı Yukarı Taşı (Öne Al)")
+        down_action = menu.addAction("Sayfayı Aşağı Taşı (Geriye Al)")
+
+        # Sayfa sınırları için butonları aktif/pasif yap
+        if page_idx == 0: up_action.setEnabled(False)
+        if page_idx == len(view.pdf_doc.doc) - 1: down_action.setEnabled(False)
+        if len(view.pdf_doc.doc) <= 1: del_action.setEnabled(False)
+
+        action = menu.exec_(self.thumbnail_list.mapToGlobal(pos))
+
+        if action == del_action:
+            view.pdf_doc.doc.delete_page(page_idx)
+            view.pdf_doc.current_page = max(0, min(page_idx, len(view.pdf_doc.doc)-1))
+            self.load_thumbnails()
+            view.render_page()
+        elif action == up_action:
+            view.pdf_doc.doc.move_page(page_idx, page_idx - 1)
+            view.pdf_doc.current_page = page_idx - 1
+            self.load_thumbnails()
+            view.render_page()
+        elif action == down_action:
+            view.pdf_doc.doc.move_page(page_idx, page_idx + 1)
+            view.pdf_doc.current_page = page_idx + 1
+            self.load_thumbnails()
+            view.render_page()
 
     def zoom_in(self):
         view = self.get_active_view()
