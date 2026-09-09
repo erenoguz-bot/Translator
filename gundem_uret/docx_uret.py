@@ -24,14 +24,13 @@ import os
 from typing import List, Optional
 
 from docx import Document
-from docx.enum.section import WD_SECTION
+from docx.shared import Pt, Cm
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Cm, Pt, RGBColor
 
-from .model import GundemMaddesi, HakemGorusu, KararMaddesi, ToplantiBilgisi
+from .model import GundemMaddesi, KararMaddesi, ToplantiBilgisi
 
 # ---------------------------------------------------------------------------
 # Görsel sabitler (örnek PDF'ten ölçüldü)

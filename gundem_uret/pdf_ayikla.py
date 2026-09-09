@@ -16,7 +16,6 @@ koordinatları (pdfplumber) + düz metin kalıpları (pypdf) birlikte kullanıl�
 """
 from __future__ import annotations
 
-import os
 import re
 from typing import List, Optional, Tuple
 
@@ -331,7 +330,7 @@ def hakem_formu_oku(path: str, ilk_sayfa: int = 0, son_sayfa: Optional[int] = No
 
     # --- Karar: '( X )' işaretli seçenek ---
     karar_uzun = ""
-    blok = ""
+    pass
     m = re.search(r"DEĞERLENDİRME SONUCUNUZ(.*?)(?:Projeyi tekrar|EK DOSYA|Ünvanı/Adı)", duz, re.S)
     if m:
         karar_uzun = _isaretli_satir(m.group(1))

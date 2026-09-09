@@ -1,3 +1,5 @@
+from .model import HakemGorusu
+from typing import Optional
 # -*- coding: utf-8 -*-
 """
 Eksik bilgi zenginleştirme katmanı.
@@ -14,9 +16,7 @@ için kaynak zinciri — yalnızca ELDEKİ belgeler, internet/yapay zeka yok:
 from __future__ import annotations
 
 import re
-from typing import Optional
 
-from .model import HakemGorusu
 from .pdf_ayikla import adresten_kurum
 
 KUCUK_SOZCUKLER = {"ve", "ile", "vs", "a.b.d."}
@@ -27,8 +27,8 @@ def _title_tr(metin: str) -> str:
     NECMETTİN ERBAKAN ÜNİVERSİTESİ -> Necmettin Erbakan Üniversitesi"""
     if not metin:
         return ""
-    ilk_harf = {"I": "I", "İ": "İ", "A": "A", "Ç": "Ç", "Ğ": "Ğ", "Ö": "Ö",
-                "Ş": "Ş", "Ü": "Ü"}
+    ilk_harf = metin[0].upper() if metin else ""
+
     def kelime_cikar(k):
         k = k.lower().replace("i̇", "i")
         if not k:
