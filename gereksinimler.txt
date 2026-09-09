@@ -1,0 +1,10 @@
+# Gündem üretim aracı bağımlılıkları
+# Kurulum:  pip install -r gereksinimler.txt
+
+pypdf>=4.0          # PDF düz metin çıkarımı
+pdfplumber>=0.11    # PDF kelime koordinatları (yerleşim duyarlı çıkarım)
+python-docx>=1.1    # .docx üretimi
+openpyxl>=3.1       # Excel yapılandırma dosyası
+
+PyQt5>=5.15         # Yeni modern arayüz
+qtawesome>=1.3      # Modern ikonlar
